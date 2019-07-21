@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/GrassInWind2019/gRPCwithConsul/example/proto"
+	hpb "github.com/GrassInWind2019/gRPCwithConsul/example/HelloService_proto"
 	"github.com/GrassInWind2019/gRPCwithConsul/serviceDiscovery"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/balancer/roundrobin"
@@ -19,7 +19,7 @@ const (
 )
 
 func main() {
-	err := serviceDiscovery.ConsulResolverInit("127.0.0.1:8500", "HelloService")
+	err := serviceDiscovery.ConsulResolverInit("localhost:8500", "HelloService")
 	if err != nil {
 		fmt.Println("ConsulResolverInit failed: ", err.Error())
 		return
@@ -33,7 +33,7 @@ func main() {
 	}
 	defer conn.Close()
 
-	client := proto.NewHelloServiceClient(conn)
+	client := hpb.NewHelloServiceClient(conn)
 
 	//name will be used as request to server
 	name := defaultName
@@ -45,11 +45,11 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
-		result, err := client.SayHello(ctx, &proto.HelloRequest{Name: name})
+		result, err := client.SayHello(ctx, &hpb.HelloRequest{Name: name, Num1: 1, Num2: 2})
 		if err != nil {
 			fmt.Println("client call SayHello failed: %v", err)
 		} else {
-			fmt.Println("client get: ", result.Result)
+			fmt.Printf("client get message: %s, result: %d\n", result.Message, result.Result)
 		}
 		time.Sleep(3 * time.Second)
 	}

@@ -6,26 +6,26 @@ import (
 	"net"
 	"time"
 
-	"github.com/GrassInWind2019/gRPCwithConsul/example/proto"
+	hpb "github.com/GrassInWind2019/gRPCwithConsul/example/HelloService_proto"
 	"github.com/GrassInWind2019/gRPCwithConsul/serviceDiscovery"
 	"google.golang.org/grpc"
 )
 
 const (
-	ip         = "127.0.0.1"
+	ip         = "localhost"
 	port       = 10000
 	consulPort = 8500
 )
 
 type server struct{}
 
-func (s *server) SayHello(ctx context.Context, in *proto.HelloRequest) (*proto.HelloResponse, error) {
-	fmt.Println("client called SayHello!")
-	return &proto.HelloResponse{Result: "Hello! " + in.Name + "!"}, nil
+func (s *server) SayHello(ctx context.Context, in *hpb.HelloRequest) (*hpb.HelloResponse, error) {
+	fmt.Printf("client %s called SayHello!\n", in.Name)
+	return &hpb.HelloResponse{Message: "Hello! " + in.Name + "!", Result: in.Num1 + in.Num2}, nil
 }
 
 func main() {
-	lis, err := net.ListenTCP("tcp", &net.TCPAddr{net.ParseIP(ip), port, ""})
+	lis, err := net.Listen("tcp", fmt.Sprintf("%s:%d", ip, port))
 	if err != nil {
 		fmt.Println("listen failed: ", err.Error())
 		return
@@ -47,7 +47,7 @@ func main() {
 		fmt.Println(err.Error())
 		return
 	}
-	proto.RegisterHelloServiceServer(s, &server{})
+	hpb.RegisterHelloServiceServer(s, &server{})
 	if err := s.Serve(lis); err != nil {
 		fmt.Println("serve failed: ", err.Error())
 		return
