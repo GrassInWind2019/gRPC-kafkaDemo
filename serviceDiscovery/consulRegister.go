@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ type consulClientMonitor struct {
 	client          *consulapi.Client
 	//record service which registered to consul server
 	csr         consulServiceRegister
+	mutex       sync.Mutex
 	csAddrExist bool
 	//ch use to notify clientMonitor to start work
 	ch               chan struct{}
@@ -43,7 +45,10 @@ func getServiceId(name, addr string, port int) string {
 
 //create a consul client for register and unregister service to consul
 //csAddr is the address of consul server
+//this function should only call once
 func CreateConsulRegisterClient(csAddr string) error {
+	ccMonitor.mutex.Lock()
+	defer ccMonitor.mutex.Unlock()
 	if ccMonitor.csAddrExist == false {
 		ccMonitor.conulServerAddr = csAddr
 		fmt.Println("consul server address set to ", ccMonitor.conulServerAddr)
@@ -87,8 +92,11 @@ func (csr *consulServiceRegister) registerServiceToConsul(info ServiceInfo) erro
 		fmt.Printf("register service %s to consul failed\n", info.ServiceName)
 		return err
 	}
-	fmt.Printf("Service %s registered to consul server %s\n", info.ServiceName, ccMonitor.conulServerAddr)
-	ccMonitor.csr.sm[info.ServiceName] = &info
+	fmt.Printf("Service %s:%s:%d registered to consul server %s\n", info.ServiceName, info.Addr, info.Port, ccMonitor.conulServerAddr)
+	//need protect store service info for concurrent calls
+	ccMonitor.mutex.Lock()
+	ccMonitor.csr.sm[serviceId] = &info
+	ccMonitor.mutex.Unlock()
 
 	if ccMonitor.isMonitorWorking == false {
 		ccMonitor.ch <- struct{}{}
@@ -130,7 +138,7 @@ func (csr *consulServiceRegister) deregisterServiceFromConsul(info ServiceInfo) 
 		fmt.Printf("deregister for service %s failed: %s\n", info.ServiceName, err.Error())
 		return err
 	} else {
-		fmt.Printf("deregister service %s from consul server\n", info.ServiceName)
+		fmt.Printf("deregister service %s:%s:%d from consul server\n", info.ServiceName, info.Addr, info.Port)
 	}
 
 	err = ccMonitor.client.Agent().CheckDeregister(serviceId)
@@ -138,7 +146,9 @@ func (csr *consulServiceRegister) deregisterServiceFromConsul(info ServiceInfo) 
 		fmt.Printf("deregister service %s from consul check failed\n", info.ServiceName)
 	}
 
-	delete(ccMonitor.csr.sm, info.ServiceName)
+	ccMonitor.mutex.Lock()
+	delete(ccMonitor.csr.sm, serviceId)
+	ccMonitor.mutex.Unlock()
 
 	return nil
 }
