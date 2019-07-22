@@ -2,6 +2,7 @@ package serviceDiscovery
 
 import (
 	"fmt"
+	"time"
 
 	consulapi "github.com/hashicorp/consul/api"
 	"google.golang.org/grpc/resolver"
@@ -31,6 +32,8 @@ func (crb *consulResolverBuilder) Build(target resolver.Target, cc resolver.Clie
 		},
 	}
 	r.start()
+	go crb.csMonitor(cc)
+
 	return r, nil
 }
 func (*consulResolverBuilder) Scheme() string { return consulScheme }
@@ -48,6 +51,22 @@ func (crb *consulResolverBuilder) resolveServiceFromConsul() ([]resolver.Address
 		addrs = append(addrs, address)
 	}
 	return addrs, nil
+}
+
+func (crb *consulResolverBuilder) csMonitor(cc resolver.ClientConn) {
+	t := time.NewTicker(time.Second)
+	//Get service addresses from consul every second and update them to gRPC
+	for {
+		<-t.C
+		addrs, err := crb.resolveServiceFromConsul()
+		if err != nil {
+			fmt.Println("resolveServiceFromConsul failed: ", err.Error())
+			continue
+		} else {
+			//fmt.Println("resolveServiceFromConsul success: ", addrs)
+		}
+		cc.UpdateState(resolver.State{Addresses: addrs})
+	}
 }
 
 type consulResolver struct {
@@ -71,7 +90,8 @@ func ConsulResolverInit(address string, serviceName string) error {
 		fmt.Println("new consul client failed: ", err.Error())
 		return err
 	}
-	resolver.Register(&consulResolverBuilder{address: address, client: client, serviceName: serviceName})
+	crb := &consulResolverBuilder{address: address, client: client, serviceName: serviceName}
+	resolver.Register(crb)
 
 	return nil
 }

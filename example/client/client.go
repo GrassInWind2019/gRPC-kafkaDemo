@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"time"
 
 	hpb "github.com/GrassInWind2019/gRPCwithConsul/example/HelloService_proto"
@@ -19,6 +20,10 @@ const (
 )
 
 func main() {
+	//get CPU numbers
+	maxProcs := runtime.NumCPU()
+	//set maxProcs goroutines can run concurrently
+	runtime.GOMAXPROCS(maxProcs)
 	err := serviceDiscovery.ConsulResolverInit("localhost:8500", "HelloService")
 	if err != nil {
 		fmt.Println("ConsulResolverInit failed: ", err.Error())
@@ -51,6 +56,6 @@ func main() {
 		} else {
 			fmt.Printf("client get message: %s, result: %d\n", result.Message, result.Result)
 		}
-		time.Sleep(3 * time.Second)
+		time.Sleep(2 * time.Second)
 	}
 }
