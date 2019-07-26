@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
+	"os/signal"
 	"runtime"
-	"sync"
+	"strconv"
+	"syscall"
 	"time"
 
 	hpb "github.com/GrassInWind2019/gRPCwithConsul/example/HelloService_proto"
@@ -22,25 +25,30 @@ const (
 var port = []int{10000, 10001}
 
 type hsServerMonitor struct {
-	hsServers []*helloServiceServer
+	hsServers     []*helloServiceServer
+	sigCh         chan os.Signal
+	stopFaultCh   chan struct{}
+	stopRecoverCh chan struct{}
+	doneFaultCh   chan struct{}
+	doneRecoverCh chan struct{}
 }
 
 type helloServiceServer struct {
-	ip      string
-	port    int
 	info    *serviceDiscovery.ServiceInfo
 	gServer *grpc.Server
+	ch      chan struct{}
 }
 
 func (s *helloServiceServer) SayHello(ctx context.Context, in *hpb.HelloRequest) (*hpb.HelloResponse, error) {
-	fmt.Printf("client %s called SayHello from Server: %s:%d\n", in.Name, s.ip, s.port)
-	return &hpb.HelloResponse{Message: "Hello! " + in.Name + "!" + fmt.Sprintf("This is Server: %s:%d", s.ip, s.port), Result: in.Num1 + in.Num2}, nil
+	fmt.Printf("client %s called SayHello from Server: %s:%d\n", in.Name, s.info.Addr, s.info.Port)
+	return &hpb.HelloResponse{Message: "Hello! " + in.Name + "!" + fmt.Sprintf("This is Server: %s:%d", s.info.Addr, s.info.Port), Result: in.Num1 + in.Num2}, nil
 }
 
-func startHelloServiceServer(ip string, hsPort int, wg *sync.WaitGroup, hsServer *helloServiceServer) {
-	defer wg.Done()
+func startHelloServiceServer(hsServer *helloServiceServer) {
+	//notify helloServiceServerMonitor to do recovery
+	defer func() { hsServer.ch <- struct{}{} }()
 
-	lis, err := net.Listen("tcp", fmt.Sprintf("%s:%d", ip, hsPort))
+	lis, err := net.Listen("tcp", fmt.Sprintf("%s:%d", hsServer.info.Addr, hsServer.info.Port))
 	if err != nil {
 		fmt.Println("listen failed: ", err.Error())
 		return
@@ -59,19 +67,100 @@ func startHelloServiceServer(ip string, hsPort int, wg *sync.WaitGroup, hsServer
 	}
 }
 
-func (hssMonitor *hsServerMonitor) helloServiceServerMonitor() {
-	t := time.NewTimer(10 * time.Second)
+func (hssMonitor *hsServerMonitor) faultSimulator() {
+	t := time.NewTicker(15 * time.Second)
 	for {
-		<-t.C
-		for _, s := range hssMonitor.hsServers {
-			s.gServer.GracefulStop()
-			fmt.Printf("server %s:%d graceful stopped!\n", s.ip, s.port)
+		select {
+		case <-t.C:
+			fmt.Println("time out! Stop servers!")
+			for _, s := range hssMonitor.hsServers {
+				s.gServer.GracefulStop()
+				fmt.Printf("server %s:%d graceful stopped!\n", s.info.Addr, s.info.Port)
+			}
+		case <-hssMonitor.stopFaultCh:
+			fmt.Println("faultSimulator stopped!")
+			hssMonitor.doneFaultCh <- struct{}{}
+			return
 		}
 	}
 }
 
+func newHelloServiceServer(hsPort int) *helloServiceServer {
+	s := grpc.NewServer()
+	info := &serviceDiscovery.ServiceInfo{
+		Addr:           ip,
+		Port:           hsPort,
+		ServiceName:    "HelloService",
+		UpdateInterval: 5 * time.Second,
+		CheckInterval:  20}
+	ch := make(chan struct{}, 1)
+	hsServer := &helloServiceServer{
+		info:    info,
+		gServer: s,
+		ch:      ch}
+	return hsServer
+}
+
+func (hssMonitor *hsServerMonitor) startNewServer(hsPort int) {
+	hsServer := newHelloServiceServer(hsPort)
+	hssMonitor.hsServers = append(hssMonitor.hsServers, hsServer)
+	go startHelloServiceServer(hsServer)
+}
+
+func (hssMonitor *hsServerMonitor) helloServiceServerMonitor() {
+	serverNum := 0
+	for _, hsPort := range port {
+		serverNum++
+		hssMonitor.startNewServer(hsPort)
+	}
+	for {
+		for i := 0; i < serverNum; i++ {
+			select {
+			//hello service server fault happened, start new server as recovery
+			case <-hssMonitor.hsServers[i].ch:
+				//delete the stopped grpc server
+				fmt.Printf("server %s:%d deleted from slice!\n", hssMonitor.hsServers[i].info.Addr, hssMonitor.hsServers[i].info.Port)
+				if i != len(hssMonitor.hsServers)-1 {
+					hssMonitor.hsServers = append(hssMonitor.hsServers[:i], hssMonitor.hsServers[i+1:]...)
+				} else {
+					hssMonitor.hsServers = hssMonitor.hsServers[:i]
+				}
+				port[i] += 5
+				hssMonitor.startNewServer(port[i])
+			case <-hssMonitor.stopRecoverCh:
+				fmt.Println("helloServiceServerMonitor stopped!")
+				hssMonitor.doneRecoverCh <- struct{}{}
+				return
+			default:
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func (hssMonitor *hsServerMonitor) signalHandler() {
+	signal.Notify(hssMonitor.sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGABRT)
+	sig := <-hssMonitor.sigCh
+	fmt.Println("Receive signal: ", sig)
+	//notify clientMonitor to deregister services
+	serviceDiscovery.SignalNotify()
+	//stop faultSimulator goroutine
+	hssMonitor.stopFaultCh <- struct{}{}
+	//stop helloServiceServerMonitor goroutine
+	hssMonitor.stopRecoverCh <- struct{}{}
+
+	//wait clientMonitor finish work
+	serviceDiscovery.SignalDone()
+	//wait faultSimulator finish
+	<-hssMonitor.doneFaultCh
+	//wait helloServiceServerMonitor finish
+	<-hssMonitor.doneRecoverCh
+	fmt.Println("signalHandler done! Exit!")
+	s, _ := strconv.Atoi(fmt.Sprintf("%d", sig))
+	os.Exit(s)
+}
+
 func main() {
-	var wg sync.WaitGroup
 	//get CPU numbers
 	maxProcs := runtime.NumCPU()
 	//set maxProcs goroutines can run concurrently
@@ -83,33 +172,15 @@ func main() {
 	}
 	hssMonitor := new(hsServerMonitor)
 	hssMonitor.hsServers = make([]*helloServiceServer, 0)
-	t := time.NewTimer(15 * time.Second)
+	hssMonitor.sigCh = make(chan os.Signal, 1)
+	hssMonitor.stopFaultCh = make(chan struct{}, 1)
+	hssMonitor.stopRecoverCh = make(chan struct{}, 1)
+	hssMonitor.doneFaultCh = make(chan struct{}, 1)
+	hssMonitor.doneRecoverCh = make(chan struct{}, 1)
+	go hssMonitor.faultSimulator()
+	go hssMonitor.helloServiceServerMonitor()
+	go hssMonitor.signalHandler()
+
 	for {
-		for i, hsPort := range port {
-			wg.Add(1)
-			port[i] += 5
-			s := grpc.NewServer()
-			info := &serviceDiscovery.ServiceInfo{
-				Addr:           ip,
-				Port:           hsPort,
-				ServiceName:    "HelloService",
-				UpdateInterval: 10 * time.Second,
-				CheckInterval:  15}
-			hsServer := &helloServiceServer{
-				ip:      ip,
-				port:    hsPort,
-				info:    info,
-				gServer: s}
-			hssMonitor.hsServers = append(hssMonitor.hsServers, hsServer)
-			go startHelloServiceServer(ip, hsPort, &wg, hsServer)
-		}
-		<-t.C
-		fmt.Println("time out! Stop servers!")
-		for _, s := range hssMonitor.hsServers {
-			s.gServer.GracefulStop()
-			fmt.Printf("server %s:%d graceful stopped!\n", s.ip, s.port)
-		}
-		//wait all goroutines done
-		wg.Wait()
 	}
 }

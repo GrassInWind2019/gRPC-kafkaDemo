@@ -24,15 +24,17 @@ func (crb *consulResolverBuilder) Build(target resolver.Target, cc resolver.Clie
 	if err != nil {
 		return &consulResolver{}, nil
 	}
+	ch := make(chan struct{}, 1)
 	r := &consulResolver{
 		target: target,
 		cc:     cc,
 		addrsStore: map[string][]resolver.Address{
 			consulServiceName: addrs,
 		},
+		rnCh: ch,
 	}
 	r.start()
-	go crb.csMonitor(cc)
+	go crb.csMonitor(r)
 
 	return r, nil
 }
@@ -53,11 +55,17 @@ func (crb *consulResolverBuilder) resolveServiceFromConsul() ([]resolver.Address
 	return addrs, nil
 }
 
-func (crb *consulResolverBuilder) csMonitor(cc resolver.ClientConn) {
-	t := time.NewTicker(time.Second)
-	//Get service addresses from consul every second and update them to gRPC
+func (crb *consulResolverBuilder) csMonitor(cr *consulResolver) {
+	t := time.NewTicker(200 * time.Millisecond)
+	//Get service addresses from consul every 500 Millisecond and update them to gRPC
 	for {
-		<-t.C
+		select {
+		case <-t.C:
+		//resolve now
+		case <-cr.rnCh:
+			//fmt.Println("resolve service adress now!")
+		}
+
 		addrs, err := crb.resolveServiceFromConsul()
 		if err != nil {
 			fmt.Println("resolveServiceFromConsul failed: ", err.Error())
@@ -65,7 +73,7 @@ func (crb *consulResolverBuilder) csMonitor(cc resolver.ClientConn) {
 		} else {
 			//fmt.Println("resolveServiceFromConsul success: ", addrs)
 		}
-		cc.UpdateState(resolver.State{Addresses: addrs})
+		cr.cc.UpdateState(resolver.State{Addresses: addrs})
 	}
 }
 
@@ -73,14 +81,17 @@ type consulResolver struct {
 	target     resolver.Target
 	cc         resolver.ClientConn
 	addrsStore map[string][]resolver.Address
+	rnCh       chan struct{}
 }
 
 func (r *consulResolver) start() {
 	addrs := r.addrsStore[r.target.Endpoint]
 	r.cc.UpdateState(resolver.State{Addresses: addrs})
 }
-func (*consulResolver) ResolveNow(o resolver.ResolveNowOption) {}
-func (*consulResolver) Close()                                 {}
+func (cr *consulResolver) ResolveNow(o resolver.ResolveNowOption) {
+	cr.rnCh <- struct{}{}
+}
+func (*consulResolver) Close() {}
 
 func ConsulResolverInit(address string, serviceName string) error {
 	config := consulapi.DefaultConfig()

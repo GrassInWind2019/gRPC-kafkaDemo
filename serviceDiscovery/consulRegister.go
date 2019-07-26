@@ -3,11 +3,7 @@ package serviceDiscovery
 import (
 	"errors"
 	"fmt"
-	"os"
-	"os/signal"
-	"strconv"
 	"sync"
-	"syscall"
 	"time"
 
 	consulapi "github.com/hashicorp/consul/api"
@@ -22,13 +18,16 @@ type consulClientMonitor struct {
 	csr         consulServiceRegister
 	mutex       sync.Mutex
 	csAddrExist bool
-	//ch use to notify clientMonitor to start work
-	ch               chan struct{}
+	//sigCh use to notify clientMonitor to start work
+	sigCh chan struct{}
+	//doneCh use to notify clientMonitor had finished work
+	doneCh           chan struct{}
 	isMonitorWorking bool
 }
 
 type consulServiceRegister struct {
-	sm map[string]*ServiceInfo
+	sm  map[string]*ServiceInfo
+	chm map[string]chan struct{}
 }
 
 type ServiceInfo struct {
@@ -69,12 +68,24 @@ func CreateConsulRegisterClient(csAddr string) error {
 	}
 }
 
+//API for user to register a service to consul server
 func RegisterServiceToConsul(info ServiceInfo) error {
 	return ccMonitor.csr.registerServiceToConsul(info)
 }
 
+//API for user to deregister a service to consul server
 func DeregisterServiceFromConsul(info ServiceInfo) error {
 	return ccMonitor.csr.deregisterServiceFromConsul(info)
+}
+
+//User need call SignalNotify when received signal to let clientMonitor goroutine deregister services
+func SignalNotify() {
+	ccMonitor.sigCh <- struct{}{}
+}
+
+//User need call SignalDone() wait clientMonitor finish work
+func SignalDone() {
+	<-ccMonitor.doneCh
 }
 
 func (csr *consulServiceRegister) registerServiceToConsul(info ServiceInfo) error {
@@ -96,11 +107,14 @@ func (csr *consulServiceRegister) registerServiceToConsul(info ServiceInfo) erro
 	//need protect store service info for concurrent calls
 	ccMonitor.mutex.Lock()
 	ccMonitor.csr.sm[serviceId] = &info
+	ch := make(chan struct{})
+	ccMonitor.csr.chm[serviceId] = ch
 	ccMonitor.mutex.Unlock()
 
-	if ccMonitor.isMonitorWorking == false {
+	//start clientMonitor goroutine
+	/*if ccMonitor.isMonitorWorking == false {
 		ccMonitor.ch <- struct{}{}
-	}
+	}*/
 
 	//register service health check
 	asCheck := consulapi.AgentServiceCheck{TTL: fmt.Sprintf("%ds", info.CheckInterval), Status: consulapi.HealthPassing}
@@ -116,16 +130,23 @@ func (csr *consulServiceRegister) registerServiceToConsul(info ServiceInfo) erro
 	}
 
 	//start a goroutine to update health status to consul server
-	go func() {
+	go func(<-chan struct{}) {
 		t := time.NewTicker(info.UpdateInterval)
 		for {
 			<-t.C
+			//check service deregistered or not before update service health
+			select {
+			case <-ch:
+				fmt.Printf("Service %s had been deregistered, health update stopped!\n", serviceId)
+				return
+			default:
+			}
 			err = ccMonitor.client.Agent().UpdateTTL(serviceId, "", asCheck.Status)
 			if err != nil {
 				fmt.Printf("Update TTL for service %s failed: %s\n", info.ServiceName, err.Error())
 			}
 		}
-	}()
+	}(ch)
 
 	return nil
 }
@@ -144,41 +165,42 @@ func (csr *consulServiceRegister) deregisterServiceFromConsul(info ServiceInfo) 
 	err = ccMonitor.client.Agent().CheckDeregister(serviceId)
 	if err != nil {
 		fmt.Printf("deregister service %s from consul check failed\n", info.ServiceName)
+		return err
 	}
 
 	ccMonitor.mutex.Lock()
 	delete(ccMonitor.csr.sm, serviceId)
+	ch := ccMonitor.csr.chm[serviceId]
+	ch <- struct{}{}
 	ccMonitor.mutex.Unlock()
 
 	return nil
 }
 
+//clientMonitor is used to monitor signals and dereigster services before exit
 func clientMonitor() {
-	//wait until client had registered service to consul
-	<-ccMonitor.ch
-	ccMonitor.isMonitorWorking = true
+	//wait signal notify
+	<-ccMonitor.sigCh
+	//ccMonitor.isMonitorWorking = true
 	fmt.Println("consul client service monitor start!")
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGABRT)
-	sig := <-c
-	fmt.Println("Receive signal: ", sig)
 	//do service unregister
 	for _, info := range ccMonitor.csr.sm {
 		ccMonitor.csr.deregisterServiceFromConsul(*info)
 	}
 	ccMonitor.csr.sm = nil
-
-	s, _ := strconv.Atoi(fmt.Sprintf("%d", sig))
-	os.Exit(s)
+	ccMonitor.doneCh <- struct{}{}
+	fmt.Println("consul client service monitor stopped!")
 }
 
 //ensure only execute once
 func init() {
 	ccMonitor = new(consulClientMonitor)
 	ccMonitor.csAddrExist = false
-	ccMonitor.ch = make(chan struct{})
-	ccMonitor.isMonitorWorking = false
+	ccMonitor.sigCh = make(chan struct{}, 1)
+	ccMonitor.doneCh = make(chan struct{}, 1)
+	//ccMonitor.isMonitorWorking = false
 	ccMonitor.csr.sm = make(map[string]*ServiceInfo)
+	ccMonitor.csr.chm = make(map[string]chan struct{})
 	//start a goroutine to monitor consul client and do services unregister before exit
 	go clientMonitor()
 }
