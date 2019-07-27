@@ -55,7 +55,7 @@ client首先通过调用ConsulResolverInit向gRPC注册实现的resolver，然�
 本文的client example: https://github.com/GrassInWind2019/gRPCwithConsul/blob/master/example/client/client.go  
 ##server
 
- ## 相关函数原型
+## 相关函数原型
   ```
   func (r *consulResolver) start()
   //gRPCwithConsul/example/HelloService_proto/HelloService.pb.go
@@ -130,8 +130,7 @@ func (p *rrPicker) Pick(ctx context.Context, opts balancer.PickOptions) (balance
 	return sc, nil, nil
 }
 ```
-
-##本文相关代码说明  
+## 本文相关代码说明  
 ```
  func (crb *consulResolverBuilder) resolveServiceFromConsul() ([]resolver.Address, error) {
   //调用consul API来获取指定service的地址信息
