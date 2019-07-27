@@ -45,8 +45,8 @@ watcher()-->UpdateClientConnState()这个方法会根据consul获取的新地址
 实际上调用的是通过proto自动生成的代码中的helloServiceClient的SayHello方法。  
 SayHello()-->Invoke()  
 Invoke()-->newClientStream()-->newAttemptLocked()-->getTransport()-->Pick()该方法轮询可用连接来使用即roundrobin负载均衡    
- &emsp;&emsp;&emsp;&emsp;-->SendMsg()该方法将请求发送给对应的server  
- &emsp;&emsp;&emsp;&emsp;-->RecvMsg()该方法接收server回应的respoonse  
+&emsp;&emsp;-->SendMsg()该方法将请求发送给对应的server  
+&emsp;&emsp;-->RecvMsg()该方法接收server回应的respoonse  
  
  4. 小结
  client需要实现gRPC resolver相关接口，以使得gRPC能够获取service的地址。gRPC的resolver example: https://github.com/grpc/grpc-go/blob/master/examples/features/name_resolving/client/main.go  
@@ -61,8 +61,8 @@ client首先通过调用ConsulResolverInit向gRPC注册实现的resolver，然�
 3. 调用RegisterServiceToConsul向consul server注册一个service。  
 RegisterServiceToConsul()-->registerServiceToConsul()  
 registerServiceToConsul()-->ServiceRegister()通过调用consul client的ServiceRegister方法向consul server注册  
- &emsp;&emsp;&emsp;&emsp;&emsp;-->AgentServiceCheck()向consul server注册service的health check  
-  &emsp;&emsp;&emsp;&emsp;&emsp;-->创建了一个goroutine并定期调用UpdateTTL向consul server表明service还是OK的。  
+ &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;-->AgentServiceCheck()向consul server注册service的health check  
+ &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;-->创建了一个goroutine并定期调用UpdateTTL向consul server表明service还是OK的。  
 4. 调用RegisterHelloServiceServer向gRPC注册一个service及它提供的方法。  
 RegisterHelloServiceServer()-->RegisterService()-->register()  
 register将service提供的方法根据名称保存到了一个map中。  
@@ -101,9 +101,9 @@ var _HelloService_serviceDesc = grpc.ServiceDesc{
 ```
 6. 调用Serve来为client提供服务。  
 Serve()-->Accept()接受client连接  
-&emsp;&emsp;&emsp;-->新创建一个goroutine来处理建立的连接-->handleRawConn()
+&emsp;&emsp;&emsp;-->新创建一个goroutine来处理建立的连接-->handleRawConn()  
 handleRawConn()-->newHTTP2Transport()-->NewServerTransport()-->newHTTP2Server()这个方法会与client完成http2握手，然后创建一个goroutine专门用于发送数据。  
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;-->serveStreams()-->HandleStreams()-->operateHeaders()-->handleStream()会从接收到的stream中取出service和method名称，然后从server结构对应的map表中找出method handler。  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;-->serveStreams()-->HandleStreams()-->operateHeaders()-->handleStream()会从接收到的stream中取出service和method名称，然后从server结构对应的map表中找出method handler。  
 ```
 func (s *Server) handleStream(t transport.ServerTransport, stream *transport.Stream, trInfo *traceInfo) {
 	//获取stream的Method名称
@@ -135,8 +135,8 @@ func (s *Server) handleStream(t transport.ServerTransport, stream *transport.Str
 }
 ```
 processUnaryRPC()-->NewContextWithServerTransportStream()创建一个context  
-&emsp;&emsp;&emsp;&emsp;&emsp;-->Handler()实际就是调用SayHello  
-&emsp;&emsp;&emsp;&emsp;&emsp;-->sendResponse()将执行结果发送给client  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;-->Handler()实际就是调用SayHello  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;-->sendResponse()将执行结果发送给client  
 sendResponse()-->Write()-->put()-->executeAndPut()将数据存入controlBuffer的list中，然后通知consumer即newHTTP2Server创建的那个goroutine调用get来取数据并发送出去。  
 
 ```
