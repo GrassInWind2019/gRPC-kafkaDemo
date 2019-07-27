@@ -45,8 +45,8 @@ watcher()-->UpdateClientConnState()这个方法会根据consul获取的新地址
 实际上调用的是通过proto自动生成的代码中的helloServiceClient的SayHello方法。  
 SayHello()-->Invoke()  
 Invoke()-->newClientStream()-->newAttemptLocked()-->getTransport()-->Pick()该方法轮询可用连接来使用即roundrobin负载均衡    
-&emsp;&emsp;-->SendMsg()该方法将请求发送给对应的server  
-&emsp;&emsp;-->RecvMsg()该方法接收server回应的respoonse  
+&emsp;&emsp;&emsp;-->SendMsg()该方法将请求发送给对应的server  
+&emsp;&emsp;&emsp;-->RecvMsg()该方法接收server回应的respoonse  
  
  4. 小结
  client需要实现gRPC resolver相关接口，以使得gRPC能够获取service的地址。gRPC的resolver example: https://github.com/grpc/grpc-go/blob/master/examples/features/name_resolving/client/main.go  
