@@ -1,7 +1,7 @@
 # gRPCwithConsul
 Use gRPC + Consul to do service discovery and RPC.  
 
-# 服务发现过程  
+# 服务发现及RPC过程  
 本文使用的注记说明：  
 funcA()-->funcB()-->funcC()  
 &emsp;&emsp;&emsp;-->funcD()-->funcE()  
@@ -55,17 +55,17 @@ client首先通过调用ConsulResolverInit向gRPC注册实现的resolver，然�
 本文的client example: https://github.com/GrassInWind2019/gRPCwithConsul/blob/master/example/client/client.go
   
 ## server  
-1. 调用newHelloServiceServer来创建一个gRPC server及helloServiceServer。
-2. server通过调用Listen来侦听指定的地址和端口。
-2. 调用CreateConsulRegisterClient创建一个consul client，
-3. 调用RegisterServiceToConsul向consul server注册一个service。
-RegisterServiceToConsul()-->registerServiceToConsul()
-registerServiceToConsul()-->ServiceRegister()通过调用consul client的ServiceRegister方法向consul server注册
- &emsp;&emsp;&emsp;&emsp;&emsp;-->AgentServiceCheck()向consul server注册service的health check
-  &emsp;&emsp;&emsp;&emsp;&emsp;-->创建了一个goroutine并定期调用UpdateTTL向consul server表明service还是OK的。
-4. 调用RegisterHelloServiceServer向gRPC注册一个service及它提供的方法。
-RegisterHelloServiceServer()-->RegisterService()-->register()
-register将service提供的方法根据名称保存到了一个map中。
+1. 调用newHelloServiceServer来创建一个gRPC server及helloServiceServer。 
+2. server通过调用Listen来侦听指定的地址和端口。 
+2. 调用CreateConsulRegisterClient创建一个consul client， 
+3. 调用RegisterServiceToConsul向consul server注册一个service。  
+RegisterServiceToConsul()-->registerServiceToConsul()  
+registerServiceToConsul()-->ServiceRegister()通过调用consul client的ServiceRegister方法向consul server注册  
+ &emsp;&emsp;&emsp;&emsp;&emsp;-->AgentServiceCheck()向consul server注册service的health check  
+  &emsp;&emsp;&emsp;&emsp;&emsp;-->创建了一个goroutine并定期调用UpdateTTL向consul server表明service还是OK的。  
+4. 调用RegisterHelloServiceServer向gRPC注册一个service及它提供的方法。  
+RegisterHelloServiceServer()-->RegisterService()-->register()  
+register将service提供的方法根据名称保存到了一个map中。  
 ```
 func (s *Server) register(sd *ServiceDesc, ss interface{}) {
     ...
@@ -99,12 +99,142 @@ var _HelloService_serviceDesc = grpc.ServiceDesc{
 	Metadata: "HelloService.proto",
 }
 ```
-5. 调用Serve来为client提供服务。
+6. 调用Serve来为client提供服务。  
+Serve()-->Accept()接受client连接  
+&emsp;&emsp;&emsp;-->新创建一个goroutine来处理建立的连接-->handleRawConn()
+handleRawConn()-->newHTTP2Transport()-->NewServerTransport()-->newHTTP2Server()这个方法会与client完成http2握手，然后创建一个goroutine专门用于发送数据。  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;-->serveStreams()-->HandleStreams()-->operateHeaders()-->handleStream()会从接收到的stream中取出service和method名称，然后从server结构对应的map表中找出method handler。  
+```
+func (s *Server) handleStream(t transport.ServerTransport, stream *transport.Stream, trInfo *traceInfo) {
+	//获取stream的Method名称
+	sm := stream.Method()
+	if sm != "" && sm[0] == '/' {
+		sm = sm[1:]
+	}
+	pos := strings.LastIndex(sm, "/")
+	...
+	//获取service名称
+	service := sm[:pos]
+	//获取method名称
+	method := sm[pos+1:]
+	//从gRPC server的m map中根据service名称找到对应的service对象
+	srv, knownService := s.m[service]
+	if knownService {
+		//再从service的md map中找到对应的MethodDesc对象，其中包含method handler
+		if md, ok := srv.md[method]; ok {
+			s.processUnaryRPC(t, stream, srv, md, trInfo)
+			return
+		}
+		...
+	}
+	...
+	if err := t.WriteStatus(stream, status.New(codes.Unimplemented, errDesc)); err != nil {
+	...
+	}
+	...
+}
+```
+processUnaryRPC()-->NewContextWithServerTransportStream()创建一个context  
+&emsp;&emsp;&emsp;&emsp;&emsp;-->Handler()实际就是调用SayHello  
+&emsp;&emsp;&emsp;&emsp;&emsp;-->sendResponse()将执行结果发送给client  
+sendResponse()-->Write()-->put()-->executeAndPut()将数据存入controlBuffer的list中，然后通知consumer即newHTTP2Server创建的那个goroutine调用get来取数据并发送出去。  
 
+```
+//  google.golang.org/grpc/internal/transport/controlbuf.go
+func (c *controlBuffer) executeAndPut(f func(it interface{}) bool, it interface{}) (bool, error) {
+	var wakeUp bool
+	c.mu.Lock()
+	...
+	if c.consumerWaiting {
+		wakeUp = true
+		c.consumerWaiting = false
+	}
+	//将数据加入list中
+	c.list.enqueue(it)
+	c.mu.Unlock()
+	if wakeUp {
+		select {
+		//通知consumer取数据
+		case c.ch <- struct{}{}:
+		default:
+		}
+	}
+	return true, nil
+}
+//  google.golang.org/grpc/internal/transport/controlbuf.go
+func (c *controlBuffer) get(block bool) (interface{}, error) {
+	for {
+		...
+		if !c.list.isEmpty() {
+			//从list中取数据
+			h := c.list.dequeue()
+			c.mu.Unlock()
+			return h, nil
+		}
+		c.consumerWaiting = true
+		select {
+		//consumer等待producer生产数据
+		case <-c.ch:
+		case <-c.done:
+			c.finish()
+			return nil, ErrConnClosing
+		}
+	}
+}
+```
+7.模拟service故障及恢复  
+通过faultSimulator每隔15s调用GracefulStop来停止正在运行的server来模拟service发生故障。  
+```
+func (hssMonitor *hsServerMonitor) faultSimulator() {
+	t := time.NewTicker(15 * time.Second)
+	for {
+		select {
+		case <-t.C:
+			fmt.Println("time out! Stop servers!")
+			for _, s := range hssMonitor.hsServers {
+				s.gServer.GracefulStop()
+				fmt.Printf("server %s:%d graceful stopped!\n", s.info.Addr, s.info.Port)
+			}
+		...
+		}
+	}
+}
+```
+通过helloServiceServerMonitor来监控server状态，若发生失败退出，则重新启动一个新的server。  
+```
+ //   gRPCwithConsul/example/server/server.go
+func (hssMonitor *hsServerMonitor) startNewServer(hsPort int) {
+	hsServer := newHelloServiceServer(hsPort)
+	hssMonitor.hsServers = append(hssMonitor.hsServers, hsServer)
+	go startHelloServiceServer(hsServer)
+}
+//   gRPCwithConsul/example/server/server.go
+func (hssMonitor *hsServerMonitor) helloServiceServerMonitor() {
+	...
+	for {
+		for i := 0; i < serverNum; i++ {
+			select {
+			//hello service server fault happened, start new server as recovery
+			case <-hssMonitor.hsServers[i].ch:
+				//delete the stopped grpc server
+				...
+				port[i] += 5
+				//启动一个新的server
+				hssMonitor.startNewServer(port[i])
+			...
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+```
 
 ## 相关函数原型
   ```
+   //  gRPCwithConsul/serviceDiscovery/consulResolver.go
   func (r *consulResolver) start()
+  //  gRPCwithConsul/serviceDiscovery/consulResolver.go
+  func (crb *consulResolverBuilder) Build(target resolver.Target, cc resolver.ClientConn, opts resolver.BuildOption) (resolver.Resolver, error)
   //  gRPCwithConsul/example/HelloService_proto/HelloService.pb.go
   func (c *helloServiceClient) SayHello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloResponse, error)
   //  gRPCwithConsul/example/HelloService_proto/HelloService.pb.go
@@ -116,16 +246,26 @@ var _HelloService_serviceDesc = grpc.ServiceDesc{
   //   gRPCwithConsul/example/server/server.go
 func newHelloServiceServer(hsPort int) *helloServiceServer
 
-  func newCCResolverWrapper(cc *ClientConn) (*ccResolverWrapper, error)
-  func (crb *consulResolverBuilder) Build(target resolver.Target, cc resolver.ClientConn, opts resolver.BuildOption) (resolver.Resolver, error)
-  //google.golang.org/grpc/resolver_conn_wrapper.go
-  func (ccr *ccResolverWrapper) UpdateState(s resolver.State)     
-  //google.golang.org/grpc/clientconn.go
-  func (cc *ClientConn) updateResolverState(s resolver.State) error   
-  //grpc/grpc-go/balancer/roundrobin/roundrobin.go
+ //  google.golang.org/grpc/resolver_conn_wrapper.go
+func newCCResolverWrapper(cc *ClientConn) (*ccResolverWrapper, error)
+//  google.golang.org/grpc/resolver_conn_wrapper.go
+func (ccr *ccResolverWrapper) UpdateState(s resolver.State)     
+//  google.golang.org/grpc/clientconn.go
+func (cc *ClientConn) updateResolverState(s resolver.State) error   
+//  grpc/grpc-go/balancer/roundrobin/roundrobin.go
 func (p *rrPicker) Pick(ctx context.Context, opts balancer.PickOptions) (balancer.SubConn, func(balancer.DoneInfo), error)
+//  google.golang.org/grpc/server.go
+func (s *Server) Serve(lis net.Listener) error
+//  google.golang.org/grpc/server.go
+func (s *Server) newHTTP2Transport(c net.Conn, authInfo credentials.AuthInfo) transport.ServerTransport
+//  google.golang.org/grpc/server.go
+func (s *Server) serveStreams(st transport.ServerTransport)
+//  google.golang.org/grpc/internal/transport/http2_server.go
+func (t *http2Server) HandleStreams(handle func(*Stream), traceCtx func(context.Context, string) context.Context)
+//   google.golang.org/grpc/internal/transport/http2_server.go
+func (t *http2Server) Write(s *Stream, hdr []byte, data []byte, opts *Options) error
   ```  
-  ## gRPC相关代码说明
+  ## gRPC其他相关代码说明
   ```
   google.golang.org/grpc/resolver.go
   GRPCLB源码解释
@@ -185,7 +325,7 @@ func (p *rrPicker) Pick(ctx context.Context, opts balancer.PickOptions) (balance
 	return sc, nil, nil
 }
 ```
-## 本文相关代码说明  
+## 本文其他相关代码说明  
 ```
  func (crb *consulResolverBuilder) resolveServiceFromConsul() ([]resolver.Address, error) {
   //调用consul API来获取指定service的地址信息
