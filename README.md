@@ -9,7 +9,7 @@ funcC()-->funcF()
 &emsp;&emsp;&emsp;-->funcG()  
 上面的函数调用关系为：funcA按序调用了funcB和funcD，funcB调用了funcC,funcD直接调用了funcE, funcC调用了funcF和funcG。  
 
-##RPC接口  
+## RPC接口  
 RPC接口通过protobuf定义，使用的是proto3版本。  
 ```
 //The request message containing the user's name
@@ -54,7 +54,7 @@ Invoke()-->newClientStream()-->newAttemptLocked()-->getTransport()-->Pick()该�
 client首先通过调用ConsulResolverInit向gRPC注册实现的resolver，然后调用Dial与server建立连接，然后再调用NewHelloServiceClient创建一个通过protoc自动生成的HelloService的client，最后就可以调用这个client的SayHello方法来实现RPC。  
 本文的client example: https://github.com/GrassInWind2019/gRPCwithConsul/blob/master/example/client/client.go
   
-##server  
+## server  
 1. server通过调用Listen来侦听指定的地址和端口。  
 2. 调用RegisterServiceToConsul向consul server注册一个service。
 3. 调用Serve来为client提供服务。
