@@ -55,15 +55,66 @@ client首先通过调用ConsulResolverInit向gRPC注册实现的resolver，然�
 本文的client example: https://github.com/GrassInWind2019/gRPCwithConsul/blob/master/example/client/client.go
   
 ## server  
-1. server通过调用Listen来侦听指定的地址和端口。  
-2. 调用RegisterServiceToConsul向consul server注册一个service。
-3. 调用Serve来为client提供服务。
+1. 调用newHelloServiceServer来创建一个gRPC server及helloServiceServer。
+2. server通过调用Listen来侦听指定的地址和端口。
+2. 调用CreateConsulRegisterClient创建一个consul client，
+3. 调用RegisterServiceToConsul向consul server注册一个service。
+RegisterServiceToConsul()-->registerServiceToConsul()
+registerServiceToConsul()-->ServiceRegister()通过调用consul client的ServiceRegister方法向consul server注册
+ &emsp;&emsp;&emsp;&emsp;&emsp;-->AgentServiceCheck()向consul server注册service的health check
+  &emsp;&emsp;&emsp;&emsp;&emsp;-->创建了一个goroutine并定期调用UpdateTTL向consul server表明service还是OK的。
+4. 调用RegisterHelloServiceServer向gRPC注册一个service及它提供的方法。
+RegisterHelloServiceServer()-->RegisterService()-->register()
+register将service提供的方法根据名称保存到了一个map中。
+```
+func (s *Server) register(sd *ServiceDesc, ss interface{}) {
+    ...
+	srv := &service{
+		server: ss,
+		md:     make(map[string]*MethodDesc),
+        ...
+	}
+	//将待注册的service的MethodDesc对象保存到新创建的service的md中
+	for i := range sd.Methods {
+		d := &sd.Methods[i]
+		srv.md[d.MethodName] = d
+	}
+    ...
+	//将新创建的service对象保存到server的m中
+	s.m[sd.ServiceName] = srv
+}
+func RegisterHelloServiceServer(s *grpc.Server, srv HelloServiceServer) {
+	s.RegisterService(&_HelloService_serviceDesc, srv)
+}
+var _HelloService_serviceDesc = grpc.ServiceDesc{
+	ServiceName: "HelloService_proto.HelloService",
+	HandlerType: (*HelloServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "SayHello",
+			Handler:    _HelloService_SayHello_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "HelloService.proto",
+}
+```
+5. 调用Serve来为client提供服务。
+
 
 ## 相关函数原型
   ```
   func (r *consulResolver) start()
-  //gRPCwithConsul/example/HelloService_proto/HelloService.pb.go
+  //  gRPCwithConsul/example/HelloService_proto/HelloService.pb.go
   func (c *helloServiceClient) SayHello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloResponse, error)
+  //  gRPCwithConsul/example/HelloService_proto/HelloService.pb.go
+  func RegisterHelloServiceServer(s *grpc.Server, srv HelloServiceServer)
+  //  gRPCwithConsul/serviceDiscovery/consulRegister.go
+  func CreateConsulRegisterClient(csAddr string) error
+  //  gRPCwithConsul/serviceDiscovery/consulRegister.go
+  func (csr *consulServiceRegister) registerServiceToConsul(info ServiceInfo) error
+  //   gRPCwithConsul/example/server/server.go
+func newHelloServiceServer(hsPort int) *helloServiceServer
 
   func newCCResolverWrapper(cc *ClientConn) (*ccResolverWrapper, error)
   func (crb *consulResolverBuilder) Build(target resolver.Target, cc resolver.ClientConn, opts resolver.BuildOption) (resolver.Resolver, error)
@@ -143,7 +194,6 @@ func (p *rrPicker) Pick(ctx context.Context, opts balancer.PickOptions) (balance
 		fmt.Println("call consul Health API failed, ", err)
 		return nil, err
 	}
-
 	addrs := make([]resolver.Address, 0)
 	for _, serviceEntry := range serviceEntries {
     //将获取的地址信息组装成resolver.Address类型返回
@@ -166,7 +216,7 @@ func (crb *consulResolverBuilder) csMonitor(cr *consulResolver) {
 		cr.cc.UpdateState(resolver.State{Addresses: addrs})
 	}
 }
-gRPCwithConsul/example/HelloService_proto/HelloService.pb.go
+//   gRPCwithConsul/example/HelloService_proto/HelloService.pb.go
 func (c *helloServiceClient) SayHello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloResponse, error) {    
 	out := new(HelloResponse)
 	err := c.cc.Invoke(ctx, "/HelloService_proto.HelloService/SayHello", in, out, opts...)
@@ -174,5 +224,60 @@ func (c *helloServiceClient) SayHello(ctx context.Context, in *HelloRequest, opt
 		return nil, err
 	}
 	return out, nil
+}
+ //  gRPCwithConsul/serviceDiscovery/consulRegister.go
+func (csr *consulServiceRegister) registerServiceToConsul(info ServiceInfo) error {
+	serviceId := getServiceId(info.ServiceName, info.Addr, info.Port)
+	asg := &consulapi.AgentServiceRegistration{
+		ID:      serviceId,
+		Name:    info.ServiceName,
+		Tags:    []string{info.ServiceName},
+		Port:    info.Port,
+		Address: info.Addr,
+	}
+	//register service to consul server
+	err := ccMonitor.client.Agent().ServiceRegister(asg)
+   ...
+	//向consul server注册 health check
+	asCheck := consulapi.AgentServiceCheck{TTL: fmt.Sprintf("%ds", info.CheckInterval), Status: consulapi.HealthPassing}
+	err = ccMonitor.client.Agent().CheckRegister(
+		&consulapi.AgentCheckRegistration{
+			ID:                serviceId,
+			Name:              info.ServiceName,
+			ServiceID:         serviceId,
+			AgentServiceCheck: asCheck})
+   ...
+	//start a goroutine to update health status to consul server
+	go func(<-chan struct{}) {
+		t := time.NewTicker(info.UpdateInterval)
+		for {
+             select {
+			case <-t.C:
+            ...
+			}
+			//向consul server报告service HealthPassing
+			err = ccMonitor.client.Agent().UpdateTTL(serviceId, "", asCheck.Status)
+            ...
+		}
+	}(ch)
+	return nil
+}
+//   gRPCwithConsul/example/server/server.go
+func newHelloServiceServer(hsPort int) *helloServiceServer {
+	//创建一个gRPC server
+	s := grpc.NewServer()
+	info := &serviceDiscovery.ServiceInfo{
+		Addr:           ip,
+		Port:           hsPort,
+		ServiceName:    "HelloService",
+		UpdateInterval: 5 * time.Second,
+		CheckInterval:  20}
+	ch := make(chan struct{}, 1)
+	//创建一个helloServiceServer
+	hsServer := &helloServiceServer{
+		info:    info,
+		gServer: s,
+		ch:      ch}
+	return hsServer
 }
 ```  
