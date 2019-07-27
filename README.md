@@ -42,9 +42,9 @@ Dial连接server大致实现过程如下：
  &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;-->updateClientConnState()这个方法是将通过consul获取的地址信息中去除GRPCLB地址，然后通过通道发送给watcher去处理  
 watcher()-->UpdateClientConnState()这个方法会根据consul获取的新地址创建SubConn并调用Connect()去连接server，然后会检查当前的地址集合将失效的地址删除  
 3. client调用SayHello方法  
-实际上调用的是通过proto自动生成的代码中的helloServiceClient的SayHello方法。
-SayHello()-->Invoke()
-Invoke()-->newClientStream()-->newAttemptLocked()-->getTransport()-->Pick()该方法轮询可用连接来使用即roundrobin负载均衡  
+实际上调用的是通过proto自动生成的代码中的helloServiceClient的SayHello方法。  
+SayHello()-->Invoke()  
+Invoke()-->newClientStream()-->newAttemptLocked()-->getTransport()-->Pick()该方法轮询可用连接来使用即roundrobin负载均衡    
  &emsp;&emsp;&emsp;&emsp;-->SendMsg()该方法将请求发送给对应的server  
  &emsp;&emsp;&emsp;&emsp;-->RecvMsg()该方法接收server回应的respoonse  
  
