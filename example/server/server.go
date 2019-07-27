@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	_ "runtime/debug"
 	"strconv"
 	"syscall"
 	"time"
@@ -23,6 +24,7 @@ const (
 
 //if put it in const, will meet compile error:  const initializer []int literal is not a constant
 var port = []int{10000, 10001}
+var mainStopCh chan struct{}
 
 type hsServerMonitor struct {
 	hsServers     []*helloServiceServer
@@ -139,9 +141,10 @@ func (hssMonitor *hsServerMonitor) helloServiceServerMonitor() {
 }
 
 func (hssMonitor *hsServerMonitor) signalHandler() {
-	signal.Notify(hssMonitor.sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGABRT)
+	signal.Notify(hssMonitor.sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGSEGV, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGABRT)
 	sig := <-hssMonitor.sigCh
 	fmt.Println("Receive signal: ", sig)
+	printStack()
 	//notify clientMonitor to deregister services
 	serviceDiscovery.SignalNotify()
 	//stop faultSimulator goroutine
@@ -156,8 +159,17 @@ func (hssMonitor *hsServerMonitor) signalHandler() {
 	//wait helloServiceServerMonitor finish
 	<-hssMonitor.doneRecoverCh
 	fmt.Println("signalHandler done! Exit!")
+	mainStopCh <- struct{}{}
 	s, _ := strconv.Atoi(fmt.Sprintf("%d", sig))
 	os.Exit(s)
+}
+
+func printStack() {
+	fmt.Println("Print stack!")
+	//debug.PrintStack()
+	buf := make([]byte, 1<<14)
+	runtime.Stack(buf, true)
+	fmt.Printf("\n%s\n", buf)
 }
 
 func main() {
@@ -181,6 +193,9 @@ func main() {
 	go hssMonitor.helloServiceServerMonitor()
 	go hssMonitor.signalHandler()
 
-	for {
-	}
+	mainStopCh = make(chan struct{}, 1)
+	<-mainStopCh
+	fmt.Println("main terminated!")
+	/*for {
+	}*/
 }

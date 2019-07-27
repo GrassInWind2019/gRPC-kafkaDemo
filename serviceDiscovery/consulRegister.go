@@ -21,8 +21,7 @@ type consulClientMonitor struct {
 	//sigCh use to notify clientMonitor to start work
 	sigCh chan struct{}
 	//doneCh use to notify clientMonitor had finished work
-	doneCh           chan struct{}
-	isMonitorWorking bool
+	doneCh chan struct{}
 }
 
 type consulServiceRegister struct {
@@ -107,14 +106,9 @@ func (csr *consulServiceRegister) registerServiceToConsul(info ServiceInfo) erro
 	//need protect store service info for concurrent calls
 	ccMonitor.mutex.Lock()
 	ccMonitor.csr.sm[serviceId] = &info
-	ch := make(chan struct{})
+	ch := make(chan struct{}, 1)
 	ccMonitor.csr.chm[serviceId] = ch
 	ccMonitor.mutex.Unlock()
-
-	//start clientMonitor goroutine
-	/*if ccMonitor.isMonitorWorking == false {
-		ccMonitor.ch <- struct{}{}
-	}*/
 
 	//register service health check
 	asCheck := consulapi.AgentServiceCheck{TTL: fmt.Sprintf("%ds", info.CheckInterval), Status: consulapi.HealthPassing}
@@ -133,13 +127,12 @@ func (csr *consulServiceRegister) registerServiceToConsul(info ServiceInfo) erro
 	go func(<-chan struct{}) {
 		t := time.NewTicker(info.UpdateInterval)
 		for {
-			<-t.C
 			//check service deregistered or not before update service health
 			select {
+			case <-t.C:
 			case <-ch:
 				fmt.Printf("Service %s had been deregistered, health update stopped!\n", serviceId)
 				return
-			default:
 			}
 			err = ccMonitor.client.Agent().UpdateTTL(serviceId, "", asCheck.Status)
 			if err != nil {
@@ -172,6 +165,8 @@ func (csr *consulServiceRegister) deregisterServiceFromConsul(info ServiceInfo) 
 	delete(ccMonitor.csr.sm, serviceId)
 	ch := ccMonitor.csr.chm[serviceId]
 	ch <- struct{}{}
+	delete(ccMonitor.csr.chm, serviceId)
+	fmt.Printf("service %s delete from ccMonitor\n", serviceId)
 	ccMonitor.mutex.Unlock()
 
 	return nil
@@ -181,7 +176,6 @@ func (csr *consulServiceRegister) deregisterServiceFromConsul(info ServiceInfo) 
 func clientMonitor() {
 	//wait signal notify
 	<-ccMonitor.sigCh
-	//ccMonitor.isMonitorWorking = true
 	fmt.Println("consul client service monitor start!")
 	//do service unregister
 	for _, info := range ccMonitor.csr.sm {
@@ -198,7 +192,6 @@ func init() {
 	ccMonitor.csAddrExist = false
 	ccMonitor.sigCh = make(chan struct{}, 1)
 	ccMonitor.doneCh = make(chan struct{}, 1)
-	//ccMonitor.isMonitorWorking = false
 	ccMonitor.csr.sm = make(map[string]*ServiceInfo)
 	ccMonitor.csr.chm = make(map[string]chan struct{})
 	//start a goroutine to monitor consul client and do services unregister before exit

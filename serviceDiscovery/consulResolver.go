@@ -56,7 +56,7 @@ func (crb *consulResolverBuilder) resolveServiceFromConsul() ([]resolver.Address
 }
 
 func (crb *consulResolverBuilder) csMonitor(cr *consulResolver) {
-	t := time.NewTicker(200 * time.Millisecond)
+	t := time.NewTicker(500 * time.Millisecond)
 	//Get service addresses from consul every 500 Millisecond and update them to gRPC
 	for {
 		select {
@@ -88,6 +88,8 @@ func (r *consulResolver) start() {
 	addrs := r.addrsStore[r.target.Endpoint]
 	r.cc.UpdateState(resolver.State{Addresses: addrs})
 }
+
+//gRPC will call it when connection is broken
 func (cr *consulResolver) ResolveNow(o resolver.ResolveNowOption) {
 	cr.rnCh <- struct{}{}
 }
