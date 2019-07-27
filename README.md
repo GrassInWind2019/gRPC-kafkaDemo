@@ -423,8 +423,36 @@ func newHelloServiceServer(hsPort int) *helloServiceServer {
 ```  
 
 # github code link  
-https://github.com/GrassInWind2019/gRPCwithConsul
-<iframe src="https://ghbtns.com/github-btn.html?user=GrassInWind2019&repo=gRPCwithConsul&type=watch&count=true&size=large" allowtransparency="true" frameborder="0" scrolling="0" width="156px" height="30px"></iframe>
-<iframe src="https://ghbtns.com/github-btn.html?user=GrassInWind2019&repo=gRPCwithConsul&type=fork&count=true&size=large" allowtransparency="true" frameborder="0" scrolling="0" width="156px" height="30px"></iframe>
-# 使用本文code简介
-
+https://github.com/GrassInWind2019/gRPCwithConsul  
+<iframe src="https://ghbtns.com/github-btn.html?user=GrassInWind2019&repo=gRPCwithConsul&type=watch&count=true&size=large" allowtransparency="true" frameborder="0" scrolling="0" width="156px" height="30px"></iframe>  
+<iframe src="https://ghbtns.com/github-btn.html?user=GrassInWind2019&repo=gRPCwithConsul&type=fork&count=true&size=large" allowtransparency="true" frameborder="0" scrolling="0" width="156px" height="30px"></iframe>  
+# 使用本文code简介  
+## 需要下载安装的如下：
+1. Go语言
+2. consul 
+    consul github link: https://github.com/hashicorp/consul  
+    git clone git@github.com:hashicorp/consul.git  
+    下载速度只有几kB/s，需要几个小时才能下完  
+3. protobuf
+    从https://github.com/protocolbuffers/protobuf/releases下载protobuf和protoc的包
+4. gRPC
+	git clone git@github.com:grpc/grpc-go.git  
+	下载速度只有几kB/s，需要几个小时才能下完  
+具体的安装步骤请自行搜索教程。
+5. 下载本文code  
+   git clone git@github.com:GrassInWind2019/gRPCwithConsul.git  
+## 运行步骤  
+1. consul.exe agent -dev   
+   我是在windows环境下运行的，首先启动consul server，这是最简单的方式。 
+2. 编译 gRPCwithConsul/example/server/server.go  
+使用liteIDE打开server.go，点击build按钮即可完成编译。  
+3. 运行server  
+4. 编译gRPCwithConsul/example/client/client.go  
+使用liteIDE打开client.go，点击build按钮即可完成编译。  
+5. 运行client   
+##  修改RPC接口  
+如果想修改RPC接口也就是修改HelloService.proto文件  
+修改完后需要利用protoc工具重新生成HelloService.pb.go  
+可使用如下命令  
+protoc.exe --plugin=protoc-gen-go=$GOPATH/bin/protoc-gen-go.exe --go_out=plugins=grpc:. --proto_path .  HelloService.proto  
+一定要带上--go_out=plugins=grpc，否则生成的go文件会缺少gRPC相关的code比如编译会报错，找不到HelloService.RegisterHelloServiceServer。  
