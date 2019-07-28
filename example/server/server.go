@@ -120,15 +120,16 @@ func (hssMonitor *hsServerMonitor) helloServiceServerMonitor() {
 			select {
 			//hello service server fault happened, start new server as recovery
 			case <-hssMonitor.hsServers[i].ch:
-				//delete the stopped grpc server
-				fmt.Printf("server %s:%d deleted from slice!\n", hssMonitor.hsServers[i].info.Addr, hssMonitor.hsServers[i].info.Port)
-				if i != len(hssMonitor.hsServers)-1 {
-					hssMonitor.hsServers = append(hssMonitor.hsServers[:i], hssMonitor.hsServers[i+1:]...)
-				} else {
-					hssMonitor.hsServers = hssMonitor.hsServers[:i]
-				}
+				//simulate service address change with only port change
 				port[i] += 5
-				hssMonitor.startNewServer(port[i])
+				hssMonitor.hsServers[i].info.Port = port[i]
+				//need new a gRPC server after stopping old one, otherwise will meet gRPC error:
+				//Server.RegisterService after Server.Serve for "HelloService_proto.HelloService"
+				s := grpc.NewServer()
+				hssMonitor.hsServers[i].gServer = s
+				fmt.Printf("server %s:%d start as recovery!\n", hssMonitor.hsServers[i].info.Addr, hssMonitor.hsServers[i].info.Port)
+				//start new server
+				go startHelloServiceServer(hssMonitor.hsServers[i])
 			case <-hssMonitor.stopRecoverCh:
 				fmt.Println("helloServiceServerMonitor stopped!")
 				hssMonitor.doneRecoverCh <- struct{}{}
@@ -196,6 +197,4 @@ func main() {
 	mainStopCh = make(chan struct{}, 1)
 	<-mainStopCh
 	fmt.Println("main terminated!")
-	/*for {
-	}*/
 }
