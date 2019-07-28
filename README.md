@@ -467,3 +467,8 @@ liteIDE下载link：https://sourceforge.net/projects/liteide/
 可使用如下命令  
 protoc.exe --plugin=protoc-gen-go=$GOPATH/bin/protoc-gen-go.exe --go_out=plugins=grpc:. --proto_path .  HelloService.proto  
 一定要带上--go_out=plugins=grpc，否则生成的go文件会缺少gRPC相关的code比如编译会报错，找不到HelloService.RegisterHelloServiceServer。  
+## 运行结果  
+### server  
+![server.png](https://github.com/GrassInWind2019/gRPCwithConsul/blob/master/server.png)
+### client  
+![client.png](https://github.com/GrassInWind2019/gRPCwithConsul/blob/master/client.png)
