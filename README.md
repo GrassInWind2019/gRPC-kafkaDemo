@@ -219,11 +219,15 @@ func (hssMonitor *hsServerMonitor) helloServiceServerMonitor() {
 			select {
 			//hello service server fault happened, start new server as recovery
 			case <-hssMonitor.hsServers[i].ch:
-				//delete the stopped grpc server
-				...
+				//通过改变port，来模拟service地址变化，client调用RPC接口依旧正常工作
 				port[i] += 5
-				//启动一个新的server
-				hssMonitor.startNewServer(port[i])
+				hssMonitor.hsServers[i].info.Port = port[i]
+				//need new a gRPC server after stopping old one, otherwise will meet gRPC error:
+				//Server.RegisterService after Server.Serve for "HelloService_proto.HelloService"
+				s := grpc.NewServer()
+				hssMonitor.hsServers[i].gServer = s
+				//start new server
+				go startHelloServiceServer(hssMonitor.hsServers[i])
 			...
 			}
 		}
