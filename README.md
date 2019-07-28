@@ -7,7 +7,10 @@ funcA()-->funcB()-->funcC()
 &emsp;&emsp;&emsp;-->funcD()-->funcE()  
 funcC()-->funcF()  
 &emsp;&emsp;&emsp;-->funcG()  
-上面的函数调用关系为：funcA按序调用了funcB和funcD，funcB调用了funcC,funcD直接调用了funcE, funcC调用了funcF和funcG。  
+上面的函数调用关系为：funcA按序调用了funcB和funcD，funcB调用了funcC,funcD直接调用了funcE, funcC调用了funcF和funcG。 
+
+## 服务发现及RPC示意图
+![服务发现及RPC示意图.png](https://github.com/GrassInWind2019/gRPCwithConsul/blob/master/服务发现及RPC示意图.png)
 
 ## RPC接口  
 RPC接口通过protobuf定义，使用的是proto3版本。  
