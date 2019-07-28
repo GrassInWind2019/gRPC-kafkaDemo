@@ -1,5 +1,24 @@
-# gRPCwithConsul
-Use gRPC + Consul to do service discovery and RPC.  
+# 目录
+- [gRPC + consul](#gRPC + consul)
+- [服务发现及RPC过程](#服务发现及RPC过程)
+  * [服务发现及RPC示意图](#服务发现及RPC示意图)
+  * [RPC接口](#RPC接口)
+  * [client](#client)
+  * [server](#server)
+  * [相关函数原型](#相关函数原型)
+  * [gRPC其他相关代码说明](#gRPC其他相关代码说明)
+  * [本文其他相关代码说明](#本文其他相关代码说明)
+  * [github code link](#github code link)
+- [使用本文code简介](#使用本文code简介)
+  * [需要下载安装的如下](#需要下载安装的如下)
+  * [运行步骤](#运行步骤)
+  * [修改RPC接口](#修改RPC接口)
+  * [运行结果](#运行结果)
+  * * [server](#server)
+  * * [client](#client)
+# gRPC + consul
+本文使用consul做服务发现，gRPC来处理RPC(Remote Procedure Call)即远程过程调用。
+gRPC是google开源的一个高性能、通用的RPC框架，基于http2、protobuf设计开发，是一个跨编程语言的RPC框架，跨编程语言让client和server可以采用不同的编程语言开发。
 
 # 服务发现及RPC过程  
 本文使用的注记说明：  
@@ -435,7 +454,7 @@ https://github.com/GrassInWind2019/gRPCwithConsul
 <iframe src="https://ghbtns.com/github-btn.html?user=GrassInWind2019&repo=gRPCwithConsul&type=fork&count=true&size=large" allowtransparency="true" frameborder="0" scrolling="0" width="156px" height="30px"></iframe>  
   
 # 使用本文code简介  
-## 需要下载安装的如下：
+## 需要下载安装的如下  
 1. Go语言  
 	下载link: https://golang.google.cn/dl/  
 2. consul  
