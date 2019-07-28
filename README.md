@@ -1,5 +1,5 @@
 # 目录
-- [gRPC + consul](#gRPC + consul)
+- [gRPC + consul](#gRPC+consul)
 - [服务发现及RPC过程](#服务发现及RPC过程)
   * [服务发现及RPC示意图](#服务发现及RPC示意图)
   * [RPC接口](#RPC接口)
@@ -8,7 +8,7 @@
   * [相关函数原型](#相关函数原型)
   * [gRPC其他相关代码说明](#gRPC其他相关代码说明)
   * [本文其他相关代码说明](#本文其他相关代码说明)
-  * [github code link](#github code link)
+  * [本文github链接](#本文github链接)
 - [使用本文code简介](#使用本文code简介)
   * [需要下载安装的如下](#需要下载安装的如下)
   * [运行步骤](#运行步骤)
@@ -16,7 +16,7 @@
   * [运行结果](#运行结果)
   * * [server](#server)
   * * [client](#client)
-# gRPC + consul
+# gRPC+consul
 本文使用consul做服务发现，gRPC来处理RPC(Remote Procedure Call)即远程过程调用。
 gRPC是google开源的一个高性能、通用的RPC框架，基于http2、protobuf设计开发，是一个跨编程语言的RPC框架，跨编程语言让client和server可以采用不同的编程语言开发。
 
@@ -448,7 +448,7 @@ func newHelloServiceServer(hsPort int) *helloServiceServer {
 }
 ```  
 
-# github code link  
+# 本文github链接  
 https://github.com/GrassInWind2019/gRPCwithConsul  
 <iframe src="https://ghbtns.com/github-btn.html?user=GrassInWind2019&repo=gRPCwithConsul&type=watch&count=true&size=large" allowtransparency="true" frameborder="0" scrolling="0" width="156px" height="30px"></iframe>  
 <iframe src="https://ghbtns.com/github-btn.html?user=GrassInWind2019&repo=gRPCwithConsul&type=fork&count=true&size=large" allowtransparency="true" frameborder="0" scrolling="0" width="156px" height="30px"></iframe>  
