@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"runtime"
 	"time"
 
-	hpb "github.com/GrassInWind2019/gRPCwithConsul/example/HelloService_proto"
-	"github.com/GrassInWind2019/gRPCwithConsul/serviceDiscovery"
+	cpb "github.com/GrassInWind2019/gRPC-kafkaDemo/example/CalculateService_proto"
+	"github.com/GrassInWind2019/gRPC-kafkaDemo/serviceDiscovery"
+	"github.com/fatih/color"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/balancer/roundrobin"
 )
@@ -24,21 +26,21 @@ func main() {
 	maxProcs := runtime.NumCPU()
 	//set maxProcs goroutines can run concurrently
 	runtime.GOMAXPROCS(maxProcs)
-	err := serviceDiscovery.ConsulResolverInit("localhost:8500", "HelloService")
+	err := serviceDiscovery.ConsulResolverInit("localhost:8500", "CalculateService")
 	if err != nil {
 		fmt.Println("ConsulResolverInit failed: ", err.Error())
 		return
 	}
 
 	//Connect to the server
-	conn, err := grpc.Dial(fmt.Sprintf("%s:///HelloService", consulScheme), grpc.WithInsecure(), grpc.WithBalancerName(roundrobin.Name))
+	conn, err := grpc.Dial(fmt.Sprintf("%s:///CalculateService", consulScheme), grpc.WithInsecure(), grpc.WithBalancerName(roundrobin.Name))
 	if err != nil {
-		fmt.Println("dial to HelloService failed: %v", err)
+		fmt.Println("dial to CalculateService failed: %v", err)
 		return
 	}
 	defer conn.Close()
 
-	client := hpb.NewHelloServiceClient(conn)
+	client := cpb.NewCalculateServiceClient(conn)
 
 	//name will be used as request to server
 	name := defaultName
@@ -50,12 +52,37 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
-		result, err := client.SayHello(ctx, &hpb.HelloRequest{Name: name, Num1: 1, Num2: 2})
-		if err != nil {
-			fmt.Println("client call SayHello failed: %v", err)
-		} else {
-			fmt.Printf("client get message: %s, result: %d\n", result.Message, result.Result)
+		rand.Seed(time.Now().UnixNano())
+		methods := []byte("+-*/")
+		method := string(methods[rand.Intn(len(methods))])
+		num1 := rand.Intn(20)
+		num2 := rand.Intn(20)
+
+		if rand.Intn(100) < 20 {
+			//simulate invalid request
+			invalidMethods := []string{"&&&", "--", "++", "**", "//", "^^^"}
+			method = invalidMethods[rand.Intn(len(invalidMethods))]
+			color.Set(color.FgRed, color.Bold)
+			fmt.Printf("Simulate invalid request: %d %s %d\n", num1, method, num2)
+			color.Unset()
 		}
-		time.Sleep(2 * time.Second)
+
+		result, err := client.Calculate(ctx, &cpb.CalculateRequest{Name: name, Method: method, Num1: int32(num1), Num2: int32(num2)})
+		if err != nil {
+			color.Set(color.FgRed, color.Bold)
+			fmt.Println("client call Calculate failed: %v", err)
+			color.Unset()
+		} else {
+			if result.SuccessFlag {
+				color.Set(color.FgGreen, color.Bold)
+				fmt.Printf("client get message: %s, %s, result: %f\n", result.Message, fmt.Sprintf("Process %d %s %d success", num1, method, num2), result.Result)
+				color.Unset()
+			} else {
+				color.Set(color.FgYellow, color.Bold)
+				fmt.Printf("client get message: %s, %s\n", result.Message, fmt.Sprintf("Process %d %s %d failed", num1, method, num2))
+				color.Unset()
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

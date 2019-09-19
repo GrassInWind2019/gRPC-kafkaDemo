@@ -2,175 +2,188 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
-	"net"
+	"log"
+	_ "net/http"
 	"os"
 	"os/signal"
 	"runtime"
-	_ "runtime/debug"
+	"runtime/pprof"
 	"strconv"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
-	hpb "github.com/GrassInWind2019/gRPCwithConsul/example/HelloService_proto"
-	"github.com/GrassInWind2019/gRPCwithConsul/serviceDiscovery"
-	"google.golang.org/grpc"
+	"github.com/GrassInWind2019/gRPC-kafkaDemo/consumer"
+	"github.com/GrassInWind2019/gRPC-kafkaDemo/producer"
+	"github.com/fatih/color"
+	"github.com/go-redis/redis"
 )
 
-const (
-	ip         = "localhost"
-	consulPort = 8500
+// Sarma configuration options
+var (
+	brokers = ""
+	version = ""
+	group   = ""
+	topics  = ""
+	oldest  = true
+	verbose = false
+	rdb     *redis.Client
+	rdbOpt  = redis.Options{
+		Addr:         ":6379",
+		DialTimeout:  10 * time.Second,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		PoolSize:     10,
+		PoolTimeout:  30 * time.Second,
+		Password:     "123",
+	}
 )
 
-//if put it in const, will meet compile error:  const initializer []int literal is not a constant
-var port = []int{10000, 10001}
-var mainStopCh chan struct{}
+func init() {
+	flag.StringVar(&brokers, "brokers", "", "Kafka bootstrap brokers to connect to, as a comma separated list")
+	flag.StringVar(&group, "group", "", "Kafka consumer group definition")
+	flag.StringVar(&version, "version", "2.1.1", "Kafka cluster version")
+	flag.StringVar(&topics, "topics", "", "Kafka topics to be consumed, as a comma seperated list")
+	flag.Parse()
 
-type hsServerMonitor struct {
-	hsServers     []*helloServiceServer
-	sigCh         chan os.Signal
-	stopFaultCh   chan struct{}
-	stopRecoverCh chan struct{}
-	doneFaultCh   chan struct{}
-	doneRecoverCh chan struct{}
+	if len(brokers) == 0 {
+		panic("no Kafka bootstrap brokers defined, please set the -brokers flag")
+	}
+
+	if len(topics) == 0 {
+		panic("no topics given to be consumed, please set the -topics flag")
+	}
+
+	if len(group) == 0 {
+		panic("no Kafka consumer group defined, please set the -group flag")
+	}
+	rdb = redis.NewClient(&rdbOpt)
 }
 
-type helloServiceServer struct {
-	info    *serviceDiscovery.ServiceInfo
-	gServer *grpc.Server
-	ch      chan struct{}
+type server struct {
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
-func (s *helloServiceServer) SayHello(ctx context.Context, in *hpb.HelloRequest) (*hpb.HelloResponse, error) {
-	fmt.Printf("client %s called SayHello from Server: %s:%d\n", in.Name, s.info.Addr, s.info.Port)
-	return &hpb.HelloResponse{Message: "Hello! " + in.Name + "!" + fmt.Sprintf("This is Server: %s:%d", s.info.Addr, s.info.Port), Result: in.Num1 + in.Num2}, nil
-}
-
-func startHelloServiceServer(hsServer *helloServiceServer) {
-	//notify helloServiceServerMonitor to do recovery
-	defer func() { hsServer.ch <- struct{}{} }()
-
-	lis, err := net.Listen("tcp", fmt.Sprintf("%s:%d", hsServer.info.Addr, hsServer.info.Port))
+func (s *server) processReq(req string) (float32, error) {
+	cnt1 := strings.Count(req, "+")
+	cnt2 := strings.Count(req, "-")
+	cnt3 := strings.Count(req, "*")
+	cnt4 := strings.Count(req, "/")
+	total := cnt1 + cnt2 + cnt3 + cnt4
+	if total != 1 {
+		return 0, errors.New("request is invalid")
+	}
+	method := ""
+	if cnt1 == 1 {
+		method = "+"
+	}
+	if cnt2 == 1 {
+		method = "-"
+	}
+	if cnt3 == 1 {
+		method = "*"
+	}
+	if cnt4 == 1 {
+		method = "/"
+	}
+	str := strings.Split(req, method)
+	if len(str) != 2 {
+		return 0, errors.New("request is invalid")
+	}
+	num1, err := strconv.Atoi(str[0])
 	if err != nil {
-		fmt.Println("listen failed: ", err.Error())
-		return
+		return 0, errors.New("Invalid request")
 	}
-
-	err = serviceDiscovery.RegisterServiceToConsul(*hsServer.info)
+	num2, err := strconv.Atoi(str[1])
 	if err != nil {
-		fmt.Println(err.Error())
-		return
+		return 0, errors.New("Invalid request")
 	}
-	defer serviceDiscovery.DeregisterServiceFromConsul(*hsServer.info)
-	hpb.RegisterHelloServiceServer(hsServer.gServer, hsServer)
-	if err := hsServer.gServer.Serve(lis); err != nil {
-		fmt.Println("serve failed: ", err.Error())
-		return
+	var result float32
+	if cnt1 == 1 {
+		result = float32(num1 + num2)
 	}
+	if cnt2 == 1 {
+		result = float32(num1 - num2)
+	}
+	if cnt3 == 1 {
+		result = float32(num1) * float32(num2)
+	}
+	if cnt4 == 1 {
+		result = float32(num1) / float32(num2)
+	}
+	return result, nil
 }
 
-func (hssMonitor *hsServerMonitor) faultSimulator() {
-	t := time.NewTicker(15 * time.Second)
-	for {
-		select {
-		case <-t.C:
-			fmt.Println("time out! Stop servers!")
-			for _, s := range hssMonitor.hsServers {
-				s.gServer.GracefulStop()
-				fmt.Printf("server %s:%d graceful stopped!\n", s.info.Addr, s.info.Port)
-			}
-		case <-hssMonitor.stopFaultCh:
-			fmt.Println("faultSimulator stopped!")
-			hssMonitor.doneFaultCh <- struct{}{}
-			return
+//msg represent the client request
+//If process request success, result will set to redis with [reqId, result]
+//Otherwise will return error
+func (s *server) ProcessTopic(topic, msg string, reqId int64) (int, error) {
+	switch topic {
+	case "sarama":
+		res, err := s.processReq(msg)
+		if err != nil {
+			return 2, err
 		}
-	}
-}
-
-func newHelloServiceServer(hsPort int) *helloServiceServer {
-	s := grpc.NewServer()
-	info := &serviceDiscovery.ServiceInfo{
-		Addr:           ip,
-		Port:           hsPort,
-		ServiceName:    "HelloService",
-		UpdateInterval: 5 * time.Second,
-		CheckInterval:  20}
-	ch := make(chan struct{}, 1)
-	hsServer := &helloServiceServer{
-		info:    info,
-		gServer: s,
-		ch:      ch}
-	return hsServer
-}
-
-func (hssMonitor *hsServerMonitor) startNewServer(hsPort int) {
-	hsServer := newHelloServiceServer(hsPort)
-	hssMonitor.hsServers = append(hssMonitor.hsServers, hsServer)
-	go startHelloServiceServer(hsServer)
-}
-
-func (hssMonitor *hsServerMonitor) helloServiceServerMonitor() {
-	serverNum := 0
-	for _, hsPort := range port {
-		serverNum++
-		hssMonitor.startNewServer(hsPort)
-	}
-	for {
-		for i := 0; i < serverNum; i++ {
-			select {
-			//hello service server fault happened, start new server as recovery
-			case <-hssMonitor.hsServers[i].ch:
-				//simulate service address change with only port change
-				port[i] += 5
-				hssMonitor.hsServers[i].info.Port = port[i]
-				//need new a gRPC server after stopping old one, otherwise will meet gRPC error:
-				//Server.RegisterService after Server.Serve for "HelloService_proto.HelloService"
-				s := grpc.NewServer()
-				hssMonitor.hsServers[i].gServer = s
-				fmt.Printf("server %s:%d start as recovery!\n", hssMonitor.hsServers[i].info.Addr, hssMonitor.hsServers[i].info.Port)
-				//start new server
-				go startHelloServiceServer(hssMonitor.hsServers[i])
-			case <-hssMonitor.stopRecoverCh:
-				fmt.Println("helloServiceServerMonitor stopped!")
-				hssMonitor.doneRecoverCh <- struct{}{}
-				return
-			default:
-			}
+		err = rdb.Publish(fmt.Sprintf("%d", reqId), fmt.Sprintf("%f", res)).Err()
+		if err != nil {
+			color.Set(color.FgYellow, color.Bold)
+			log.Printf("ProcessTopic: Publish to redis failed, channel %d, value %f, %s\n", reqId, res, err.Error())
+			color.Unset()
+			return 2, err
 		}
-		time.Sleep(10 * time.Millisecond)
+		/*err = rdb.Set(fmt.Sprintf("%d", reqId), fmt.Sprintf("%f", res), 120*time.Second).Err()
+		if err != nil {
+			color.Set(color.FgYellow, color.Bold)
+			log.Printf("ProcessTopic: set to redis failed, key %d, value %f, %s\n", reqId, res, err.Error())
+			color.Unset()
+			return 2, err
+		}*/
+		color.Set(color.FgGreen, color.Bold)
+		log.Printf("ProcessTopic: [%s] success, reqId %d, result %f", msg, reqId, res)
+		color.Unset()
+		return 0, nil
+	case "GrassInWind2019":
+		log.Println("ProcessTopic: GrassInWind2019: ", msg)
+	default:
+		errStr := fmt.Sprintf("unknown topic %s !", topic)
+		return 0, errors.New(errStr)
 	}
+	return 0, nil
 }
 
-func (hssMonitor *hsServerMonitor) signalHandler() {
-	signal.Notify(hssMonitor.sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGSEGV, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGABRT)
-	sig := <-hssMonitor.sigCh
-	fmt.Println("Receive signal: ", sig)
-	printStack()
-	//notify clientMonitor to deregister services
-	serviceDiscovery.SignalNotify()
-	//stop faultSimulator goroutine
-	hssMonitor.stopFaultCh <- struct{}{}
-	//stop helloServiceServerMonitor goroutine
-	hssMonitor.stopRecoverCh <- struct{}{}
-
-	//wait clientMonitor finish work
-	serviceDiscovery.SignalDone()
-	//wait faultSimulator finish
-	<-hssMonitor.doneFaultCh
-	//wait helloServiceServerMonitor finish
-	<-hssMonitor.doneRecoverCh
-	fmt.Println("signalHandler done! Exit!")
-	mainStopCh <- struct{}{}
-	s, _ := strconv.Atoi(fmt.Sprintf("%d", sig))
-	os.Exit(s)
+func (s *server) ProcessRetryFailure(topic, msg string, reqId int64) error {
+	color.Set(color.FgHiRed, color.Bold)
+	defer color.Unset()
+	//err := rdb.Set(fmt.Sprintf("%d", reqId), "Failure", 0).Err()
+	err := rdb.Publish(fmt.Sprintf("%d", reqId), "Failure").Err()
+	if err != nil {
+		log.Printf("ProcessDeadLetterTopic: set to redis failed, key %d, value %s\n", reqId, "Failure")
+		return err
+	}
+	return nil
 }
 
-func printStack() {
-	fmt.Println("Print stack!")
-	//debug.PrintStack()
-	buf := make([]byte, 1<<14)
-	runtime.Stack(buf, true)
-	fmt.Printf("\n%s\n", buf)
+//For request process failed after retry, result will set to redis with [reqId, "Failure"]
+func (s *server) ProcessDeadLetterTopic(topic, msg string, reqId int64) error {
+	log.Printf("ProcessDeadLetterTopic: topic %s, ID %d, body: %s\n", topic, reqId, msg)
+	return nil
+}
+
+func (s *server) CheckDone() bool {
+	// check if context was cancelled, notify the consumer to stop
+	if s.ctx.Err() != nil {
+		return true
+	}
+	return false
+}
+
+func (s *server) Context() context.Context {
+	return s.ctx
 }
 
 func main() {
@@ -178,23 +191,56 @@ func main() {
 	maxProcs := runtime.NumCPU()
 	//set maxProcs goroutines can run concurrently
 	runtime.GOMAXPROCS(maxProcs)
-	err := serviceDiscovery.CreateConsulRegisterClient(fmt.Sprintf("%s:%d", ip, consulPort))
+	cpuf, err := os.OpenFile("cpu.prof", os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
-		fmt.Println(err.Error())
-		return
+		panic(err)
 	}
-	hssMonitor := new(hsServerMonitor)
-	hssMonitor.hsServers = make([]*helloServiceServer, 0)
-	hssMonitor.sigCh = make(chan os.Signal, 1)
-	hssMonitor.stopFaultCh = make(chan struct{}, 1)
-	hssMonitor.stopRecoverCh = make(chan struct{}, 1)
-	hssMonitor.doneFaultCh = make(chan struct{}, 1)
-	hssMonitor.doneRecoverCh = make(chan struct{}, 1)
-	go hssMonitor.faultSimulator()
-	go hssMonitor.helloServiceServerMonitor()
-	go hssMonitor.signalHandler()
+	pprof.StartCPUProfile(cpuf)
+	heapf, err := os.OpenFile("heap.prof", os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		panic(err)
+	}
 
-	mainStopCh = make(chan struct{}, 1)
-	<-mainStopCh
-	fmt.Println("main terminated!")
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &server{
+		ctx:    ctx,
+		cancel: cancel,
+	}
+	kafkaProducer, err := producer.NewKafkaSyncProducer(ctx, brokers)
+	if err != nil {
+		panic(err)
+	}
+	buffer := kafkaProducer.GetBuffer()
+	if buffer == nil {
+		panic("Kafka buffer is nil")
+	}
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+	kafkaConsumer, client := consumer.NewConsumer(brokers, group, topics, s, wg)
+	kafkaConsumer.SetBuffer(buffer)
+	<-kafkaConsumer.Ready // Await till the consumer has been set up
+	log.Println("Sarama consumer up and running!...")
+
+	//go http.ListenAndServe("localhost:9000", nil)
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGSEGV, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGABRT)
+	select {
+	case <-ctx.Done():
+		log.Println("terminating: context cancelled")
+	case <-sigCh:
+		log.Println("terminating: via signal")
+	}
+	//notify consumer to stop
+	s.cancel()
+	//wait consumer exit
+	wg.Wait()
+	pprof.StopCPUProfile()
+	cpuf.Close()
+	pprof.WriteHeapProfile(heapf)
+	heapf.Close()
+	if err := client.Close(); err != nil {
+		log.Panicf("Error closing client: %v", err)
+	}
+	os.Exit(1)
 }

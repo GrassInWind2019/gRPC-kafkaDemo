@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package CalculateService_proto;
+
+//The request message containing the user's name
+message CalculateRequest {
+    string name = 1;
+	string method = 2;
+    int32  num1 = 3;
+    int32  num2 = 4;
+}
+
+//The response message
+message CalculateResponse {
+    string message = 1;
+	bool    successFlag = 2;
+    double  result = 3;
+}
+
+//service definition
+service CalculateService {
+    rpc Calculate(CalculateRequest) returns(CalculateResponse);
+}
