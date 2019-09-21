@@ -16,16 +16,16 @@
   * [运行结果](#运行结果)
   * * [server](#server)
   * * [client](#client)
-# gRPC/consul/kafka简介
+# gRPC/consul/kafka简介  
 consul是一个分布式的基于数据中心的服务发现框架，常用的其他服务发现框架有zookeeper, etcd, eureka。  
 gRPC是google开源的一个高性能、通用的RPC框架，基于http2、protobuf设计开发，是一个跨编程语言的RPC框架，跨编程语言让client和server可以采用不同的编程语言开发。 
-kafka是一个分布式的流处理平台。它可以用于两大类别的应用：
-1.构造实时流数据管道，它可以在系统或应用之间可靠地获取数据。（相当于message queue）
-2.构建实时流式应用程序，对这些流数据进行转换或者影响。（就是流处理，通过kafka stream topic和topic之间内部进行变化）
+kafka是一个分布式的流处理平台。它可以用于两大类别的应用：  
+1.构造实时流数据管道，它可以在系统或应用之间可靠地获取数据。（相当于message queue）  
+2.构建实时流式应用程序，对这些流数据进行转换或者影响。（就是流处理，通过kafka stream topic和topic之间内部进行变化）  
 kafka中文文档官网：http://kafka.apachecn.org/  
 常用的其他消息队列框架有：ActiveMQ,RabbitMQ,RocketMQ.  
 
-本文使用consul做服务发现，gRPC来处理RPC(Remote Procedure Call)即远程过程调用，消息队列框架采用了kafka，数据存储采用了redis。
+本文使用consul做服务发现，gRPC来处理RPC(Remote Procedure Call)即远程过程调用，消息队列框架采用了kafka，数据存储采用了redis。  
 
 # gRPC+kafka Demo  
 本文使用的注记说明：  
@@ -36,11 +36,13 @@ funcC()-->funcF()
 上面的函数调用关系为：funcA按序调用了funcB和funcD，funcB调用了funcC,funcD直接调用了funcE, funcC调用了funcF和funcG。 
 
 ## gRPC+kafka整体示意图
-![gRPC-kafkaDemo.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/tree/master/image/gRPC-kafkaDemo.png)
+![gRPC-kafkaDemo.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/blob/master/image/gRPC-kafkaDemo.png)
 
 ## 限流器  
 基于gRPC拦截器和令牌桶算法实现了一个简易的限流器。相关code如下：  
+color.Set()是一个设置屏幕输出颜色的函数，由github.com/fatih/color提供。  
 ```
+//gRPC拦截器
 func unaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	//调用限流器handler
 	if throttleHandler(info) == false {
@@ -53,6 +55,7 @@ func unaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServ
 	m, err := handler(ctx, req)
 	...
 }
+//限流器
 func throttleHandler(info *grpc.UnaryServerInfo) bool {
 	s := info.Server.(*CalculateServiceServer)
 	pass := false
@@ -63,6 +66,7 @@ func throttleHandler(info *grpc.UnaryServerInfo) bool {
 	}
 	return pass
 }
+//令牌产生器
 //simulate produce one token per 0.1 second
 func (s *CalculateServiceServer) tokenProducer() {
 	t := time.NewTicker(100 * time.Millisecond)
@@ -94,7 +98,7 @@ func GetUniqueID(rdb *redis.Client, key string) (int64, error) {
 ```  
 ## kafka生产消费  
 ### kafka生产消费示意图  
-![kafka生产消费示意图.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/tree/master/image/kafka生产消费示意图.png)
+![kafka生产消费示意图.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/blob/master/image/kafka生产消费示意图.png)
 ### 本文kafka生产消费过程  
 proxy将client请求按[topic type][retry count][reqID][req]编码为一条消息发送到kafka，server从kafka获取client请求然后处理，若处理失败发送到对应的Retry topic，如果Retry处理后依旧失败，则发送到对应的Dead Letter topic。  
 本文通过将kafka consumer消费的offset保存到redis中，并在consumer下次重启后从redis中恢复offset来继续消费，从而避免重复消费。（sarama实现的kafka consumer是有一个专门的goroutine定时flush commmited offset,发生重启后sarama从zookeeper获取offset可能有较大偏差。）  
@@ -142,6 +146,7 @@ func (s *CalculateServiceServer) Calculate(ctx context.Context, in *cpb.Calculat
 }
 //server
 //consumer
+//在sarama的每次session建立后，在consume执行前，根据redis记录的offset接着消费
 func (consumer *Consumer) Setup(sess sarama.ConsumerGroupSession) error {
 	//获取session消费的topic有哪些分区
 	m_partitions := sess.Claims()
@@ -235,18 +240,18 @@ Dial连接server大致实现过程如下：
   updateResolverState()-->newCCBalancerWrapper()-->watcher()这个watcher goroutine专门监控service的地址变化并更新连接  
  &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;-->updateClientConnState()这个方法是将通过consul获取的地址信息中去除GRPCLB地址，然后通过通道发送给watcher去处理  
 watcher()-->UpdateClientConnState()这个方法会根据consul获取的新地址创建SubConn并调用Connect()去连接server，然后会检查当前的地址集合将失效的地址删除  
-3. client调用SayHello方法  
-实际上调用的是通过proto自动生成的代码中的helloServiceClient的SayHello方法。  
-SayHello()-->Invoke()  
+3. client调用Calculate方法  
+实际上调用的是通过proto自动生成的代码中的helloServiceClient的Calculate方法。  
+Calculate()-->Invoke()  
 Invoke()-->newClientStream()-->newAttemptLocked()-->getTransport()-->Pick()该方法轮询可用连接来使用即roundrobin负载均衡    
 &emsp;&emsp;&emsp;-->SendMsg()该方法将请求发送给对应的server  
 &emsp;&emsp;&emsp;-->RecvMsg()该方法接收server回应的respoonse  
  
  4. 小结
  client需要实现gRPC resolver相关接口，以使得gRPC能够获取service的地址。gRPC的resolver example: https://github.com/grpc/grpc-go/blob/master/examples/features/name_resolving/client/main.go  
- 本文的resolver example: https://github.com/GrassInWind2019/gRPCwithConsul/blob/master/serviceDiscovery/consulResolver.go  
-client首先通过调用ConsulResolverInit向gRPC注册实现的resolver，然后调用Dial与server建立连接，然后再调用NewHelloServiceClient创建一个通过protoc自动生成的HelloService的client，最后就可以调用这个client的SayHello方法来实现RPC。  
-本文的client example: https://github.com/GrassInWind2019/gRPCwithConsul/blob/master/example/client/client.go
+ 本文的resolver example: https://github.com/GrassInWind2019/gRPC-kafkaDemo/blob/master/serviceDiscovery/consulResolver.go  
+client首先通过调用ConsulResolverInit向gRPC注册实现的resolver，然后调用Dial与server建立连接，然后再调用NewCalculateClient创建一个通过protoc自动生成的CalculateService的client，最后就可以调用这个client的Calculate方法来实现RPC。  
+本文的client example: https://github.com/GrassInWind2019/gRPC-kafkaDemo/blob/master/example/client/client.go
   
 ## proxy  
 1. 调用NewCalculateServiceServer来创建一个gRPC server及CalculateService。 
@@ -318,16 +323,19 @@ processUnaryRPC()-->NewContextWithServerTransportStream()创建一个context
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;-->sendResponse()将执行结果发送给client  
 sendResponse()-->Write()-->put()-->executeAndPut()将数据存入controlBuffer的list中，然后通知consumer即newHTTP2Server创建的那个goroutine调用get来取数据并发送出去。  
 
-7.模拟service故障及恢复  
+7. Calculate服务  
+Calculate首先根据请求内容去redis中查询是否有对应的记录，若没有则先获取一个唯一id作为请求id，然后向redis订阅以这个id为名称的channel。订阅成功后，新产生一条消息，发送到kafka。然后设置3s超时，在订阅的通道等待server的处理结果。  
+
+8.模拟service故障及恢复  
 通过faultSimulator每隔20s调用GracefulStop来停止正在运行的server来模拟service发生故障。  
 ```
-func (hssMonitor *hsServerMonitor) faultSimulator() {
+func (monitor *serverMonitor) faultSimulator() {
 	t := time.NewTicker(20 * time.Second)
 	for {
 		select {
 		case <-t.C:
 			fmt.Println("time out! Stop servers!")
-			for _, s := range hssMonitor.hsServers {
+			for _, s := range monitor.servers {
 				s.gServer.GracefulStop()
 				fmt.Printf("server %s:%d graceful stopped!\n", s.info.Addr, s.info.Port)
 			}
@@ -336,11 +344,14 @@ func (hssMonitor *hsServerMonitor) faultSimulator() {
 	}
 }
 ```
-通过helloServiceServerMonitor来监控server状态，若发生失败退出，则重新启动一个新的server。通过改变port，来模拟service地址变化，client调用RPC接口依旧能正常工作。  
+通过serverMonitor来监控server状态，若发生失败退出，则重新启动一个新的server。通过改变port，来模拟service地址变化，client调用RPC接口依旧能正常工作。  
 
-## gRPC其他相关代码说明
- 
-## 本文其他相关代码说明  
+## server  
+1. server启动后创建一个producer和一个consumer group。consumer group的go client在sarama中已经提供了example,可参考https://github.com/Shopify/sarama/tree/master/examples/consumergroup  
+2. consumer启动后在Setup()中先获取session的group及partition信息，然后从redis中获取对应的offset信息，再通过ResetOffset/MarkOffset将offset重置到上一次消费的offset。 
+3. 然后consumer就进入消费消息的循环。  
+4. 在循环中，每获取一条消息就调用ProcessMessage()，对于处理失败的，在原有topic名称的基础上加上"Retry-"，然后将消息发送到一个通道，server启动的producer会从这个通道取消息发送到kafka。对于Retry类型的topic处理依旧失败的，则将其加入Dead Letter类型的topic，发送到kafka。每条消息消费后，都会将offset记录到redis中。  
+5. 对于处理成功的消息，server会将处理结果publish到以请求id为名称的channel.  
 
 # 本文github链接  
 https://github.com/GrassInWind2019/gRPC-kafkaDemo   
@@ -373,6 +384,8 @@ https://github.com/GrassInWind2019/gRPC-kafkaDemo
    windows 32位 redis下载链接：https://github.com/microsoftarchive/redis/releases/tag/win-3.2.100  
    这个版本在windows下运行不稳定...，但是redis的PUB/SUB功能需要大于2.6的版本。
    微软官方只支持64位redis，下载链接：https://github.com/microsoftarchive/redis/releases  
+8. 下载kafka go client sarama  
+   go get github.com/Shopify/sarama  
    
 具体的安装步骤请自行搜索教程。
 5. 下载本文code  
@@ -382,18 +395,29 @@ https://github.com/GrassInWind2019/gRPC-kafkaDemo
 ## 运行步骤  
 1. consul.exe agent -dev   
    我是在windows环境下运行的，首先启动consul server，这是最简单的方式。 
-2. 编译 gRPC-kafkaDemo/example/proxy/proxy.go  
+2. 运行zookeeper  
+   zkServer.cmd，windows在cmd直接运行这个，需要在zkServer.cmd所在路径打开cmd。  
+3. 启动kafka  
+   .\bin\windows\kafka-server-start.bat .\config\server1.properties
+   .\bin\windows\kafka-server-start.bat .\config\server2.properties
+   .\bin\windows\kafka-server-start.bat .\config\server3.properties
+   windows在cmd运行。  
+   kafka的server的配置可参考http://kafka.apachecn.org/quickstart.html  
+4. 启动redis server  
+   redis-server.exe redis.windows.conf
+   在windows的cmd下运行，需要在redis-server.exe所在路径打开cmd。  
+5. 编译 gRPC-kafkaDemo/example/proxy/proxy.go  
 使用liteIDE打开proxy.go，点击build按钮即可完成编译。 
 liteIDE下载link：https://sourceforge.net/projects/liteide/   
-3. 运行proxy  
+6. 运行proxy  
     windows 下可以用git bash运行，在$GOPATH/src/github.com/GrassInWind2019/gRPC-kafkaDemo/example/proxy/目录下打开git bash,  ./proxy.exe localhost:9092 GrassInWind2019即可。localhost:9092是kafka broker地址。  
-4. 编译 gRPC-kafkaDemo/example/server/server.go  
+7. 编译 gRPC-kafkaDemo/example/server/server.go  
 使用liteIDE打开server.go，点击build按钮即可完成编译。
-5. 运行server  
+8. 运行server  
 windows下在目录下打开git bash，运行./server.exe -brokers localhost:9092 -topics="GrassInWind2019" -group="example"即可。其中locahost:9092是kafka broker地址，topic名称要和proxy保持一致。
-6. 编译gRPC-kafkaDemo/example/client/client.go  
+9. 编译gRPC-kafkaDemo/example/client/client.go  
 使用liteIDE打开client.go，点击build按钮即可完成编译。 
-7. 运行client   
+10. 运行client   
 	在$GOPATH/src/github.com/GrassInWind2019/gRPC-kafkaDemo/example/client/目录下打开git bash， ./client.exe   [可选参数name]。也可以直接在liteIDE点击运行按钮。  
 ##  修改RPC接口  
 如果想修改RPC接口也就是修改CalculateService.proto文件  
@@ -403,8 +427,8 @@ protoc.exe --plugin=protoc-gen-go=$GOPATH/bin/protoc-gen-go.exe --go_out=plugins
 一定要带上--go_out=plugins=grpc，否则生成的go文件会缺少gRPC相关的code比如编译会报错，找不到CalculateService.RegisterHelloServiceServer。  
 ## 运行结果  
 ### client  
-![client.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/tree/master/image/client_pub-sub.png)
+![client.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/blob/master/image/client_pub-sub.png)
 ### proxy  
-![proxy_pub-sub.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/tree/master/image/proxy_pub-sub.png)
+![proxy_pub-sub.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/blob/master/image/proxy_pub-sub.png)
 ### server  
-![server.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/tree/master/image/server_pub-sub.png)
+![server.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/blob/master/image/server_pub-sub.png)
