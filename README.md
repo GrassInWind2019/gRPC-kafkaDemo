@@ -1,6 +1,6 @@
 # 目录
 - [gRPC/consul/kafka简介](#gRPC/consul/kafka简介)
-- [gRPC+kafka Demo](#gRPC+kafka Demo)
+- [gRPC+kafka的Demo](#gRPC+kafka的Demo)
   * [gRPC+kafka整体示意图](#gRPC+kafka整体示意图)
   * [限流器](#限流器)
   * [基于redis计数器生成唯一ID](#基于redis计数器生成唯一ID)
@@ -8,9 +8,9 @@
   * * [kafka生产消费示意图](#kafka生产消费示意图)
   * * [本文kafka生产消费过程](#本文kafka生产消费过程)
   * [基于pprof的性能分析Demo](#基于pprof的性能分析Demo)
-  * * [使用pprof统计CPU、HEAP数据的code example](#使用pprof统计CPU、HEAP数据的code example)
-  * * [基于redis Set/Get方式的pprof CPU火焰图](#基于redis Set/Get方式的pprof CPU火焰图)
-  * * [基于redis PUB/SUB方式的pprof CPU火焰图](#基于redis PUB/SUB方式的pprof CPU火焰图)
+  * * [使用pprof统计CPU/HEAP数据的code example](#使用pprof统计CPU/HEAP数据的code example)
+  * * [基于redis Set/Get方式的pprof的CPU火焰图](#基于redis Set/Get方式的pprof的CPU火焰图)
+  * * [基于redis PUB/SUB方式的pprof的CPU火焰图](#基于redis PUB/SUB方式的pprof的CPU火焰图)
   * [RPC接口](#RPC接口)
   * [client](#client)
   * [proxy](#proxy)
@@ -221,7 +221,7 @@ func (s *server) ProcessTopic(topic, msg string, reqId int64) (int, error) {
 然后采用redis的PUB/SUB对此作了优化，proxy的Calculate的CPU消耗降低到了42.86%。proxy不会出现超时拿不到结果了。(需要在测试前创建好topic,否则刚开始运行还是会出现超时，一段时间后正常。)  
 pprof分析CPU数据的命令如下  
 pprof -http=:8080 cpu_pub-sub.prof  
-### 使用pprof统计CPU、HEAP数据的code example  
+### 使用pprof统计CPU/HEAP数据的code example  
 ```
 import "runtime/pprof"
 
@@ -239,9 +239,9 @@ cpuf.Close()
 pprof.WriteHeapProfile(heapf)
 heapf.Close()
 ```
-### 基于redis Set/Get方式的pprof CPU火焰图  
+### 基于redis Set/Get方式的pprof的CPU火焰图  
 ![proxy-cpu_set-get.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/blob/master/image/proxy-cpu_set-get.png)
-### 基于redis PUB/SUB方式的pprof CPU火焰图  
+### 基于redis PUB/SUB方式的pprof的CPU火焰图  
 ![proxy-cpu_pub-sub.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/blob/master/image/proxy-cpu_pub-sub.png)
 
 ## RPC接口  
