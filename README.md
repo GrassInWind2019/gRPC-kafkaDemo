@@ -1,21 +1,29 @@
 # 目录
-- [gRPC + consul](#gRPC+consul)
-- [服务发现及RPC过程](#服务发现及RPC过程)
-  * [服务发现及RPC示意图](#服务发现及RPC示意图)
+- [gRPC/consul/kafka简介](#gRPC/consul/kafka简介)
+- [gRPC+kafka Demo](#gRPC+kafka Demo)
+  * [gRPC+kafka整体示意图](#gRPC+kafka整体示意图)
+  * [限流器](#限流器)
+  * [基于redis计数器生成唯一ID](#基于redis计数器生成唯一ID)
+  * [kafka生产消费](#kafka生产消费)
+  * * [kafka生产消费示意图](#kafka生产消费示意图)
+  * * [本文kafka生产消费过程](#本文kafka生产消费过程)
+  * [基于pprof的性能分析Demo](#基于pprof的性能分析Demo)
+  * * [使用pprof统计CPU、HEAP数据的code example](#使用pprof统计CPU、HEAP数据的code example)
+  * * [基于redis Set/Get方式的pprof CPU火焰图](#基于redis Set/Get方式的pprof CPU火焰图)
+  * * [基于redis PUB/SUB方式的pprof CPU火焰图](#基于redis PUB/SUB方式的pprof CPU火焰图)
   * [RPC接口](#RPC接口)
   * [client](#client)
+  * [proxy](#proxy)
   * [server](#server)
-  * [相关函数原型](#相关函数原型)
-  * [gRPC其他相关代码说明](#gRPC其他相关代码说明)
-  * [本文其他相关代码说明](#本文其他相关代码说明)
-  * [本文github链接](#本文github链接)
-- [使用本文code简介](#使用本文code简介)
+- [本文github链接](#本文github链接)
+- [运行Demo简介](#运行Demo简介)
   * [需要下载安装的如下](#需要下载安装的如下)
   * [运行步骤](#运行步骤)
   * [修改RPC接口](#修改RPC接口)
   * [运行结果](#运行结果)
-  * * [server](#server)
   * * [client](#client)
+  * * [proxy](#proxy)
+  * * [server](#server)
 # gRPC/consul/kafka简介  
 consul是一个分布式的基于数据中心的服务发现框架，常用的其他服务发现框架有zookeeper, etcd, eureka。  
 gRPC是google开源的一个高性能、通用的RPC框架，基于http2、protobuf设计开发，是一个跨编程语言的RPC框架，跨编程语言让client和server可以采用不同的编程语言开发。 
@@ -234,7 +242,7 @@ heapf.Close()
 ### 基于redis Set/Get方式的pprof CPU火焰图  
 ![proxy-cpu_set-get.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/blob/master/image/proxy-cpu_set-get.png)
 ### 基于redis PUB/SUB方式的pprof CPU火焰图  
-![proxy_pub-sub.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/blob/master/image/proxy_pub-sub.png)
+![proxy-cpu_pub-sub.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/blob/master/image/proxy-cpu_pub-sub.png)
 
 ## RPC接口  
 RPC接口通过protobuf定义，使用的是proto3版本。  
@@ -388,7 +396,7 @@ https://github.com/GrassInWind2019/gRPC-kafkaDemo
 <iframe src="https://ghbtns.com/github-btn.html?user=GrassInWind2019&repo=gRPC-kafkaDemo&type=watch&count=true&size=large" allowtransparency="true" frameborder="0" scrolling="0" width="156px" height="30px"></iframe>  
 <iframe src="https://ghbtns.com/github-btn.html?user=GrassInWind2019&repo=gRPC-kafkaDemo&type=fork&count=true&size=large" allowtransparency="true" frameborder="0" scrolling="0" width="156px" height="30px"></iframe>  
   
-# 使用本文code简介  
+# 运行Demo简介    
 ## 需要下载安装的如下  
 1. Go语言  
 	下载link: https://golang.google.cn/dl/  
