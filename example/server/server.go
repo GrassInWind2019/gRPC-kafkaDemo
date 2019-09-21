@@ -124,11 +124,12 @@ func (s *server) processReq(req string) (float32, error) {
 //Otherwise will return error
 func (s *server) ProcessTopic(topic, msg string, reqId int64) (int, error) {
 	switch topic {
-	case "sarama":
+	case "GrassInWind2019":
 		res, err := s.processReq(msg)
 		if err != nil {
 			return 2, err
 		}
+		//Publish result to redis
 		err = rdb.Publish(fmt.Sprintf("%d", reqId), fmt.Sprintf("%f", res)).Err()
 		if err != nil {
 			color.Set(color.FgYellow, color.Bold)
@@ -136,6 +137,7 @@ func (s *server) ProcessTopic(topic, msg string, reqId int64) (int, error) {
 			color.Unset()
 			return 2, err
 		}
+		//Set result in redis
 		/*err = rdb.Set(fmt.Sprintf("%d", reqId), fmt.Sprintf("%f", res), 120*time.Second).Err()
 		if err != nil {
 			color.Set(color.FgYellow, color.Bold)
@@ -147,8 +149,6 @@ func (s *server) ProcessTopic(topic, msg string, reqId int64) (int, error) {
 		log.Printf("ProcessTopic: [%s] success, reqId %d, result %f", msg, reqId, res)
 		color.Unset()
 		return 0, nil
-	case "GrassInWind2019":
-		log.Println("ProcessTopic: GrassInWind2019: ", msg)
 	default:
 		errStr := fmt.Sprintf("unknown topic %s !", topic)
 		return 0, errors.New(errStr)

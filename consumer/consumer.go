@@ -148,8 +148,8 @@ func (consumer *Consumer) Setup(sess sarama.ConsumerGroupSession) error {
 				log.Println("Setup: record offset is invalid!")
 				return nil
 			}
-			//if the offset record in redis smaller than the record in kafka, then need use ResetOffset
-			//if the offset record in redis bigger than the record in kafka, then need use MarkOffset
+			//if the offset record in redis smaller than the record in zookeeper, then need use ResetOffset
+			//if the offset record in redis bigger than the record in zookeeper, then need use MarkOffset
 			sess.ResetOffset(topic, partNo, offset, "")
 			sess.MarkOffset(topic, partNo, offset, "")
 			log.Printf("\n\nSetup: reset topic %s partition %d offset to %d\n\n", topic, partNo, offset)

@@ -113,6 +113,7 @@ func (s *CalculateServiceServer) Calculate(ctx context.Context, in *cpb.Calculat
 			fmt.Printf("Set %s=%f to redis succcess\n", request, result)
 			color.Unset()
 			return &cpb.CalculateResponse{Message: "Hello! " + in.Name + "!" + fmt.Sprintf("This is Server: %s:%d", s.info.Addr, s.info.Port), SuccessFlag: true, Result: result}, nil
+
 			/*default:
 			val, err := s.rdb.Get(fmt.Sprintf("%d", reqId)).Result()
 			if err == nil {

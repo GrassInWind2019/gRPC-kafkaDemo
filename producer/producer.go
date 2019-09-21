@@ -79,7 +79,7 @@ func (ksProducer *KafkaSyncProducer) Producer(ctx context.Context) {
 	log.Println("Kafka Producer exit!")
 }
 
-//message protocol: [topic type][retry count][reqID][req/rep]
+//message protocol: [topic type][retry count][reqID][req]
 func (ksProducer *KafkaSyncProducer) ProduceKafkaMessage(topic, key, val string) error {
 	val = "Normal:0:" + val
 	return ksProducer.produceKafkaMessage(topic, key, val)
