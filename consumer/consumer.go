@@ -174,11 +174,7 @@ func (consumer *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, clai
 		log.Printf("Message claimed: value = %s, timestamp = %v, topic = %s, partition=%d, offset=%d",
 			string(message.Value), message.Timestamp, message.Topic, message.Partition, message.Offset)
 		session.MarkMessage(message, "")
-		//log.Printf("High water mark: current offset is %d\n", claim.HighWaterMarkOffset())
 		consumer.recordOffset(message.Topic, message.Partition, message.Offset, claim.HighWaterMarkOffset())
-		//		if processMessage(string(message.Value)) == false {
-		//			rq.EnQueue(string(message.Value))
-		//		}
 		consumer.ProcessMessage(message.Topic, string(message.Value))
 	}
 

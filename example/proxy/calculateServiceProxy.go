@@ -69,7 +69,8 @@ func (s *CalculateServiceServer) Calculate(ctx context.Context, in *cpb.Calculat
 	// Wait for confirmation that subscription is created before publishing anything.
 	_, err = pubsub.Receive()
 	if err != nil {
-		panic(err)
+		errStr := fmt.Sprintf("Redis subscribe failed: %s", err.Error())
+		return nil, errors.New(errStr)
 	}
 	defer pubsub.Close()
 	defer pubsub.Unsubscribe(fmt.Sprintf("%d", reqId))
