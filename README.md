@@ -16,11 +16,18 @@
   * [运行结果](#运行结果)
   * * [server](#server)
   * * [client](#client)
-# gRPC+consul
-本文使用consul做服务发现，gRPC来处理RPC(Remote Procedure Call)即远程过程调用。
-gRPC是google开源的一个高性能、通用的RPC框架，基于http2、protobuf设计开发，是一个跨编程语言的RPC框架，跨编程语言让client和server可以采用不同的编程语言开发。
+# gRPC/consul/kafka简介
+consul是一个分布式的基于数据中心的服务发现框架，常用的其他服务发现框架有zookeeper, etcd, eureka。  
+gRPC是google开源的一个高性能、通用的RPC框架，基于http2、protobuf设计开发，是一个跨编程语言的RPC框架，跨编程语言让client和server可以采用不同的编程语言开发。 
+kafka是一个分布式的流处理平台。它可以用于两大类别的应用：
+1.构造实时流数据管道，它可以在系统或应用之间可靠地获取数据。（相当于message queue）
+2.构建实时流式应用程序，对这些流数据进行转换或者影响。（就是流处理，通过kafka stream topic和topic之间内部进行变化）
+kafka中文文档官网：http://kafka.apachecn.org/  
+常用的其他消息队列框架有：ActiveMQ,RabbitMQ,RocketMQ.  
 
-# 服务发现及RPC过程  
+本文使用consul做服务发现，gRPC来处理RPC(Remote Procedure Call)即远程过程调用，消息队列框架采用了kafka，数据存储采用了redis。
+
+# gRPC+kafka Demo  
 本文使用的注记说明：  
 funcA()-->funcB()-->funcC()  
 &emsp;&emsp;&emsp;-->funcD()-->funcE()  
@@ -28,26 +35,28 @@ funcC()-->funcF()
 &emsp;&emsp;&emsp;-->funcG()  
 上面的函数调用关系为：funcA按序调用了funcB和funcD，funcB调用了funcC,funcD直接调用了funcE, funcC调用了funcF和funcG。 
 
-## 服务发现及RPC示意图
-![服务发现及RPC示意图.png](https://github.com/GrassInWind2019/gRPCwithConsul/blob/master/服务发现及RPC示意图.png)
+## gRPC+kafka整体示意图
+![gRPC-kafkaDemo.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/tree/master/image/gRPC-kafkaDemo.png)
 
 ## RPC接口  
 RPC接口通过protobuf定义，使用的是proto3版本。  
 ```
 //The request message containing the user's name
-message HelloRequest {
+message CalculateRequest {
     string name = 1;
-    int32  num1 = 2;
-    int32  num2 = 3;
+	string method = 2;
+    int32  num1 = 3;
+    int32  num2 = 4;
 }
 //The response message
-message HelloResponse {
+message CalculateResponse {
     string message = 1;
-    int32  result = 2;
+	bool    successFlag = 2;
+    double  result = 3;
 }
 //service definition
-service HelloService {
-    rpc SayHello(HelloRequest) returns(HelloResponse);
+service CalculateService {
+    rpc Calculate(CalculateRequest) returns(CalculateResponse);
 }
 ```
 
@@ -76,8 +85,8 @@ Invoke()-->newClientStream()-->newAttemptLocked()-->getTransport()-->Pick()该�
 client首先通过调用ConsulResolverInit向gRPC注册实现的resolver，然后调用Dial与server建立连接，然后再调用NewHelloServiceClient创建一个通过protoc自动生成的HelloService的client，最后就可以调用这个client的SayHello方法来实现RPC。  
 本文的client example: https://github.com/GrassInWind2019/gRPCwithConsul/blob/master/example/client/client.go
   
-## server  
-1. 调用newHelloServiceServer来创建一个gRPC server及helloServiceServer。 
+## proxy  
+1. 调用NewCalculateServiceServer来创建一个gRPC server及CalculateService。 
 2. server通过调用Listen来侦听指定的地址和端口。 
 2. 调用CreateConsulRegisterClient创建一个consul client， 
 3. 调用RegisterServiceToConsul向consul server注册一个service。  
@@ -85,7 +94,7 @@ RegisterServiceToConsul()-->registerServiceToConsul()
 registerServiceToConsul()-->ServiceRegister()通过调用consul client的ServiceRegister方法向consul server注册  
  &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;-->AgentServiceCheck()向consul server注册service的health check  
  &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;-->创建了一个goroutine并定期调用UpdateTTL向consul server表明service还是OK的。  
-4. 调用RegisterHelloServiceServer向gRPC注册一个service及它提供的方法。  
+4. 调用RegisterCalculateServiceServer向gRPC注册一个service及它提供的方法。  
 RegisterHelloServiceServer()-->RegisterService()-->register()  
 register将service提供的方法根据名称保存到了一个map中。  
 ```
@@ -104,21 +113,6 @@ func (s *Server) register(sd *ServiceDesc, ss interface{}) {
     ...
 	//将新创建的service对象保存到server的m中
 	s.m[sd.ServiceName] = srv
-}
-func RegisterHelloServiceServer(s *grpc.Server, srv HelloServiceServer) {
-	s.RegisterService(&_HelloService_serviceDesc, srv)
-}
-var _HelloService_serviceDesc = grpc.ServiceDesc{
-	ServiceName: "HelloService_proto.HelloService",
-	HandlerType: (*HelloServiceServer)(nil),
-	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "SayHello",
-			Handler:    _HelloService_SayHello_Handler,
-		},
-	},
-	Streams:  []grpc.StreamDesc{},
-	Metadata: "HelloService.proto",
 }
 ```
 6. 调用Serve来为client提供服务。  
@@ -161,54 +155,11 @@ processUnaryRPC()-->NewContextWithServerTransportStream()创建一个context
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;-->sendResponse()将执行结果发送给client  
 sendResponse()-->Write()-->put()-->executeAndPut()将数据存入controlBuffer的list中，然后通知consumer即newHTTP2Server创建的那个goroutine调用get来取数据并发送出去。  
 
-```
-//  google.golang.org/grpc/internal/transport/controlbuf.go
-func (c *controlBuffer) executeAndPut(f func(it interface{}) bool, it interface{}) (bool, error) {
-	var wakeUp bool
-	c.mu.Lock()
-	...
-	if c.consumerWaiting {
-		wakeUp = true
-		c.consumerWaiting = false
-	}
-	//将数据加入list中
-	c.list.enqueue(it)
-	c.mu.Unlock()
-	if wakeUp {
-		select {
-		//通知consumer取数据
-		case c.ch <- struct{}{}:
-		default:
-		}
-	}
-	return true, nil
-}
-//  google.golang.org/grpc/internal/transport/controlbuf.go
-func (c *controlBuffer) get(block bool) (interface{}, error) {
-	for {
-		...
-		if !c.list.isEmpty() {
-			//从list中取数据
-			h := c.list.dequeue()
-			c.mu.Unlock()
-			return h, nil
-		}
-		c.consumerWaiting = true
-		select {
-		//consumer等待producer生产数据
-		case <-c.ch:
-		case <-c.done:
-			c.finish()
-			return nil, ErrConnClosing
-		}
-	}
-}
-```
 7.模拟service故障及恢复  
-通过faultSimulator每隔15s调用GracefulStop来停止正在运行的server来模拟service发生故障。  
+通过faultSimulator每隔20s调用GracefulStop来停止正在运行的server来模拟service发生故障。  
 ```
 func (hssMonitor *hsServerMonitor) faultSimulator() {
-	t := time.NewTicker(15 * time.Second)
+	t := time.NewTicker(20 * time.Second)
 	for {
 		select {
 		case <-t.C:
@@ -222,236 +173,16 @@ func (hssMonitor *hsServerMonitor) faultSimulator() {
 	}
 }
 ```
-通过helloServiceServerMonitor来监控server状态，若发生失败退出，则重新启动一个新的server。  
-```
- //   gRPCwithConsul/example/server/server.go
-func (hssMonitor *hsServerMonitor) startNewServer(hsPort int) {
-	hsServer := newHelloServiceServer(hsPort)
-	hssMonitor.hsServers = append(hssMonitor.hsServers, hsServer)
-	go startHelloServiceServer(hsServer)
-}
-//   gRPCwithConsul/example/server/server.go
-func (hssMonitor *hsServerMonitor) helloServiceServerMonitor() {
-	...
-	for {
-		for i := 0; i < serverNum; i++ {
-			select {
-			//hello service server fault happened, start new server as recovery
-			case <-hssMonitor.hsServers[i].ch:
-				//通过改变port，来模拟service地址变化，client调用RPC接口依旧正常工作
-				port[i] += 5
-				hssMonitor.hsServers[i].info.Port = port[i]
-				//need new a gRPC server after stopping old one, otherwise will meet gRPC error:
-				//Server.RegisterService after Server.Serve for "HelloService_proto.HelloService"
-				s := grpc.NewServer()
-				hssMonitor.hsServers[i].gServer = s
-				//start new server
-				go startHelloServiceServer(hssMonitor.hsServers[i])
-			...
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-```
+通过helloServiceServerMonitor来监控server状态，若发生失败退出，则重新启动一个新的server。通过改变port，来模拟service地址变化，client调用RPC接口依旧能正常工作。  
 
-## 相关函数原型
-  ```
-   //  gRPCwithConsul/serviceDiscovery/consulResolver.go
-  func (r *consulResolver) start()
-  //  gRPCwithConsul/serviceDiscovery/consulResolver.go
-  func (crb *consulResolverBuilder) Build(target resolver.Target, cc resolver.ClientConn, opts resolver.BuildOption) (resolver.Resolver, error)
-  //  gRPCwithConsul/example/HelloService_proto/HelloService.pb.go
-  func (c *helloServiceClient) SayHello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloResponse, error)
-  //  gRPCwithConsul/example/HelloService_proto/HelloService.pb.go
-  func RegisterHelloServiceServer(s *grpc.Server, srv HelloServiceServer)
-  //  gRPCwithConsul/serviceDiscovery/consulRegister.go
-  func CreateConsulRegisterClient(csAddr string) error
-  //  gRPCwithConsul/serviceDiscovery/consulRegister.go
-  func (csr *consulServiceRegister) registerServiceToConsul(info ServiceInfo) error
-  //   gRPCwithConsul/example/server/server.go
-func newHelloServiceServer(hsPort int) *helloServiceServer
-
- //  google.golang.org/grpc/resolver_conn_wrapper.go
-func newCCResolverWrapper(cc *ClientConn) (*ccResolverWrapper, error)
-//  google.golang.org/grpc/resolver_conn_wrapper.go
-func (ccr *ccResolverWrapper) UpdateState(s resolver.State)     
-//  google.golang.org/grpc/clientconn.go
-func (cc *ClientConn) updateResolverState(s resolver.State) error   
-//  grpc/grpc-go/balancer/roundrobin/roundrobin.go
-func (p *rrPicker) Pick(ctx context.Context, opts balancer.PickOptions) (balancer.SubConn, func(balancer.DoneInfo), error)
-//  google.golang.org/grpc/server.go
-func (s *Server) Serve(lis net.Listener) error
-//  google.golang.org/grpc/server.go
-func (s *Server) newHTTP2Transport(c net.Conn, authInfo credentials.AuthInfo) transport.ServerTransport
-//  google.golang.org/grpc/server.go
-func (s *Server) serveStreams(st transport.ServerTransport)
-//  google.golang.org/grpc/internal/transport/http2_server.go
-func (t *http2Server) HandleStreams(handle func(*Stream), traceCtx func(context.Context, string) context.Context)
-//   google.golang.org/grpc/internal/transport/http2_server.go
-func (t *http2Server) Write(s *Stream, hdr []byte, data []byte, opts *Options) error
-  ```  
-  ## gRPC其他相关代码说明
-  ```
-  google.golang.org/grpc/resolver.go
-  GRPCLB源码解释
-  const (
-	// Backend indicates the address is for a backend server.
-	Backend AddressType = iota
-	// GRPCLB indicates the address is for a grpclb load balancer.
-	GRPCLB
-)
-  func (ccb *ccBalancerWrapper) updateClientConnState(ccs *balancer.ClientConnState)  google.golang.org/grpc/balancer_conn_wrappers.go
-  {
-    ...
-    //通过通道发送给watcher goroutine去更新service地址
-    ccb.ccUpdateCh <- ccs
-  }
-  func (ccb *ccBalancerWrapper) watcher()   google.golang.org/grpc/balancer_conn_wrappers.go
-  {
-    ...
-    case s := <-ccb.ccUpdateCh:
-      ...
-      if ub, ok := ccb.balancer.(balancer.V2Balancer); ok {
-				ub.UpdateClientConnState(*s)
-			}
-    ...
-  }
-    func (b *baseBalancer) UpdateClientConnState(s balancer.ClientConnState) {    google.golang.org/grpc/balancer/base/balancer.go
-  ...
-	for _, a := range s.ResolverState.Addresses {
-		addrsSet[a] = struct{}{}
-		if _, ok := b.subConns[a]; !ok {
-			// a is a new address (not existing in b.subConns).
-			sc, err := b.cc.NewSubConn([]resolver.Address{a}, balancer.NewSubConnOptions{HealthCheckEnabled: b.config.HealthCheck})
-      ...
-			b.subConns[a] = sc
-			b.scStates[sc] = connectivity.Idle
-			sc.Connect()
-		}
-	}
-	//在通过consul获取service最新地址后，检查subConns中旧的地址是否失效
-	for a, sc := range b.subConns {
-		// a was removed by resolver.
-		//如果最新地址集合中不包含地址a，则代表a已失效
-		if _, ok := addrsSet[a]; !ok {
-			b.cc.RemoveSubConn(sc)
-			delete(b.subConns, a)
-		}
-	}
-}
-//roundrobin实现
-//grpc/grpc-go/balancer/roundrobin/roundrobin.go
-func (p *rrPicker) Pick(ctx context.Context, opts balancer.PickOptions) (balancer.SubConn, func(balancer.DoneInfo), error) {
-	p.mu.Lock()
-	sc := p.subConns[p.next]
-	//轮流选择可用连接使用
-	p.next = (p.next + 1) % len(p.subConns)
-	p.mu.Unlock()
-	return sc, nil, nil
-}
-```
+## gRPC其他相关代码说明
+ 
 ## 本文其他相关代码说明  
-```
- func (crb *consulResolverBuilder) resolveServiceFromConsul() ([]resolver.Address, error) {
-  //调用consul API来获取指定service的地址信息
-	serviceEntries, _, err := crb.client.Health().Service(crb.serviceName, "", true, &consulapi.QueryOptions{})
-	if err != nil {
-		fmt.Println("call consul Health API failed, ", err)
-		return nil, err
-	}
-	addrs := make([]resolver.Address, 0)
-	for _, serviceEntry := range serviceEntries {
-    //将获取的地址信息组装成resolver.Address类型返回
-		address := resolver.Address{Addr: fmt.Sprintf("%s:%d", serviceEntry.Service.Address, serviceEntry.Service.Port)}
-		addrs = append(addrs, address)
-	}
-	return addrs, nil
-}
-func (crb *consulResolverBuilder) csMonitor(cr *consulResolver) {
-	t := time.NewTicker(500 * time.Millisecond)
-	//Get service addresses from consul every 500 Millisecond and update them to gRPC
-	for {
-		select {
-		case <-t.C:
-		//resolve now
-		case <-cr.rnCh:
-		}
-		addrs, err := crb.resolveServiceFromConsul()
-...
-		cr.cc.UpdateState(resolver.State{Addresses: addrs})
-	}
-}
-//   gRPCwithConsul/example/HelloService_proto/HelloService.pb.go
-func (c *helloServiceClient) SayHello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloResponse, error) {    
-	out := new(HelloResponse)
-	err := c.cc.Invoke(ctx, "/HelloService_proto.HelloService/SayHello", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
- //  gRPCwithConsul/serviceDiscovery/consulRegister.go
-func (csr *consulServiceRegister) registerServiceToConsul(info ServiceInfo) error {
-	serviceId := getServiceId(info.ServiceName, info.Addr, info.Port)
-	asg := &consulapi.AgentServiceRegistration{
-		ID:      serviceId,
-		Name:    info.ServiceName,
-		Tags:    []string{info.ServiceName},
-		Port:    info.Port,
-		Address: info.Addr,
-	}
-	//register service to consul server
-	err := ccMonitor.client.Agent().ServiceRegister(asg)
-   ...
-	//向consul server注册 health check
-	asCheck := consulapi.AgentServiceCheck{TTL: fmt.Sprintf("%ds", info.CheckInterval), Status: consulapi.HealthPassing}
-	err = ccMonitor.client.Agent().CheckRegister(
-		&consulapi.AgentCheckRegistration{
-			ID:                serviceId,
-			Name:              info.ServiceName,
-			ServiceID:         serviceId,
-			AgentServiceCheck: asCheck})
-   ...
-	//start a goroutine to update health status to consul server
-	go func(<-chan struct{}) {
-		t := time.NewTicker(info.UpdateInterval)
-		for {
-             select {
-			case <-t.C:
-            ...
-			}
-			//向consul server报告service HealthPassing
-			err = ccMonitor.client.Agent().UpdateTTL(serviceId, "", asCheck.Status)
-            ...
-		}
-	}(ch)
-	return nil
-}
-//   gRPCwithConsul/example/server/server.go
-func newHelloServiceServer(hsPort int) *helloServiceServer {
-	//创建一个gRPC server
-	s := grpc.NewServer()
-	info := &serviceDiscovery.ServiceInfo{
-		Addr:           ip,
-		Port:           hsPort,
-		ServiceName:    "HelloService",
-		UpdateInterval: 5 * time.Second,
-		CheckInterval:  20}
-	ch := make(chan struct{}, 1)
-	//创建一个helloServiceServer
-	hsServer := &helloServiceServer{
-		info:    info,
-		gServer: s,
-		ch:      ch}
-	return hsServer
-}
-```  
 
 # 本文github链接  
-https://github.com/GrassInWind2019/gRPCwithConsul  
-<iframe src="https://ghbtns.com/github-btn.html?user=GrassInWind2019&repo=gRPCwithConsul&type=watch&count=true&size=large" allowtransparency="true" frameborder="0" scrolling="0" width="156px" height="30px"></iframe>  
-<iframe src="https://ghbtns.com/github-btn.html?user=GrassInWind2019&repo=gRPCwithConsul&type=fork&count=true&size=large" allowtransparency="true" frameborder="0" scrolling="0" width="156px" height="30px"></iframe>  
+https://github.com/GrassInWind2019/gRPC-kafkaDemo   
+<iframe src="https://ghbtns.com/github-btn.html?user=GrassInWind2019&repo=gRPC-kafkaDemo&type=watch&count=true&size=large" allowtransparency="true" frameborder="0" scrolling="0" width="156px" height="30px"></iframe>  
+<iframe src="https://ghbtns.com/github-btn.html?user=GrassInWind2019&repo=gRPC-kafkaDemo&type=fork&count=true&size=large" allowtransparency="true" frameborder="0" scrolling="0" width="156px" height="30px"></iframe>  
   
 # 使用本文code简介  
 ## 需要下载安装的如下  
@@ -470,31 +201,47 @@ https://github.com/GrassInWind2019/gRPCwithConsul
 	cd $GOPATH/src/github.com/grpc/  
 	git clone git@github.com:grpc/grpc-go.git  
 	下载速度只有几kB/s，需要几个小时才能下完  
+5. zookeeper  
+   kafka需要zookeeper来提交偏移量及配置管理等。  
+   zookeeper下载链接：http://zookeeper.apache.org/releases.html  
+6. kafka  
+   kafka下载链接：http://kafka.apache.org/downloads  
+7. redis  
+   windows 32位 redis下载链接：https://github.com/microsoftarchive/redis/releases/tag/win-3.2.100  
+   这个版本在windows下运行不稳定...，但是redis的PUB/SUB功能需要大于2.6的版本。
+   微软官方只支持64位redis，下载链接：https://github.com/microsoftarchive/redis/releases  
+   
 具体的安装步骤请自行搜索教程。
 5. 下载本文code  
    mkdir -p $GOPATH/src/github.com/GrassInWind2019/  
    cd $GOPATH/src/github.com/GrassInWind2019/  
-   git clone git@github.com:GrassInWind2019/gRPCwithConsul.git  
+   git clone git@github.com:GrassInWind2019/gRPC-kafkaDemo.git  
 ## 运行步骤  
 1. consul.exe agent -dev   
    我是在windows环境下运行的，首先启动consul server，这是最简单的方式。 
-2. 编译 gRPCwithConsul/example/server/server.go  
-使用liteIDE打开server.go，点击build按钮即可完成编译。 
+2. 编译 gRPC-kafkaDemo/example/proxy/proxy.go  
+使用liteIDE打开proxy.go，点击build按钮即可完成编译。 
 liteIDE下载link：https://sourceforge.net/projects/liteide/   
-3. 运行server  
-    windows 下可以用git bash运行，在$GOPATH/src/github.com/GrassInWind2019/gRPCwithConsul/example/server/目录下打开git bash,  ./server.exe即可。也可以直接在liteIDE点击运行按钮。  
-4. 编译gRPCwithConsul/example/client/client.go  
+3. 运行proxy  
+    windows 下可以用git bash运行，在$GOPATH/src/github.com/GrassInWind2019/gRPC-kafkaDemo/example/proxy/目录下打开git bash,  ./proxy.exe localhost:9092 GrassInWind2019即可。localhost:9092是kafka broker地址。  
+4. 编译 gRPC-kafkaDemo/example/server/server.go  
+使用liteIDE打开server.go，点击build按钮即可完成编译。
+5. 运行server  
+windows下在目录下打开git bash，运行./server.exe -brokers localhost:9092 -topics="GrassInWind2019" -group="example"即可。其中locahost:9092是kafka broker地址，topic名称要和proxy保持一致。
+6. 编译gRPC-kafkaDemo/example/client/client.go  
 使用liteIDE打开client.go，点击build按钮即可完成编译。 
-5. 运行client   
-	在$GOPATH/src/github.com/GrassInWind2019/gRPCwithConsul/example/client/目录下打开git bash， ./client.exe   [可选参数name]。也可以直接在liteIDE点击运行按钮。  
+7. 运行client   
+	在$GOPATH/src/github.com/GrassInWind2019/gRPC-kafkaDemo/example/client/目录下打开git bash， ./client.exe   [可选参数name]。也可以直接在liteIDE点击运行按钮。  
 ##  修改RPC接口  
-如果想修改RPC接口也就是修改HelloService.proto文件  
-修改完后需要利用protoc工具重新生成HelloService.pb.go  
+如果想修改RPC接口也就是修改CalculateService.proto文件  
+修改完后需要利用protoc工具重新生成CalculateService.pb.go  
 可使用如下命令  
-protoc.exe --plugin=protoc-gen-go=$GOPATH/bin/protoc-gen-go.exe --go_out=plugins=grpc:. --proto_path .  HelloService.proto  
-一定要带上--go_out=plugins=grpc，否则生成的go文件会缺少gRPC相关的code比如编译会报错，找不到HelloService.RegisterHelloServiceServer。  
+protoc.exe --plugin=protoc-gen-go=$GOPATH/bin/protoc-gen-go.exe --go_out=plugins=grpc:. --proto_path .  CalculateService.proto  
+一定要带上--go_out=plugins=grpc，否则生成的go文件会缺少gRPC相关的code比如编译会报错，找不到CalculateService.RegisterHelloServiceServer。  
 ## 运行结果  
+### proxy  
+![proxy_pub-sub.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/tree/master/image/proxy_pub-sub.png)
 ### server  
-![server.png](https://github.com/GrassInWind2019/gRPCwithConsul/blob/master/server.png)
+![server.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/tree/master/image/server_pub-sub.png)
 ### client  
-![client.png](https://github.com/GrassInWind2019/gRPCwithConsul/blob/master/client.png)
+![client.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/tree/master/image/client_pub-sub.png)
