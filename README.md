@@ -38,20 +38,183 @@ funcC()-->funcF()
 ## gRPC+kafka整体示意图
 ![gRPC-kafkaDemo.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/tree/master/image/gRPC-kafkaDemo.png)
 
+## 限流器  
+基于gRPC拦截器和令牌桶算法实现了一个简易的限流器。相关code如下：  
+```
+func unaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	//调用限流器handler
+	if throttleHandler(info) == false {
+		color.Set(color.FgHiRed, color.Bold)  //设置打印颜色
+		fmt.Printf("Request rate exceed server limts, reject!\n")
+		color.Unset()
+		return nil, errReqExceedLimitRate
+	}
+	//调用RPC handler
+	m, err := handler(ctx, req)
+	...
+}
+func throttleHandler(info *grpc.UnaryServerInfo) bool {
+	s := info.Server.(*CalculateServiceServer)
+	pass := false
+	select {
+	case <-s.limitCh:
+		pass = true
+	default:
+	}
+	return pass
+}
+//simulate produce one token per 0.1 second
+func (s *CalculateServiceServer) tokenProducer() {
+	t := time.NewTicker(100 * time.Millisecond)
+	for {
+		select {
+		case <-t.C:
+			//If bucket is full, token will been dropped
+			select {
+			case s.limitCh <- struct{}{}:
+			default:
+			}
+		...
+		}
+	}
+}
+```
+
+## 基于redis计数器生成唯一ID  
+相关code如下:  
+```  
+func GetUniqueID(rdb *redis.Client, key string) (int64, error) {
+	//get a unique number for file name prefix
+	val, err := rdb.Incr(key).Result()
+	if err != nil {
+		return -1, err
+	}
+	return val, nil
+}
+```  
+## kafka生产消费  
+### kafka生产消费示意图  
+![kafka生产消费示意图.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/tree/master/image/kafka生产消费示意图.png)
+### 本文kafka生产消费过程  
+proxy将client请求按[topic type][retry count][reqID][req]编码为一条消息发送到kafka，server从kafka获取client请求然后处理，若处理失败发送到对应的Retry topic，如果Retry处理后依旧失败，则发送到对应的Dead Letter topic。  
+本文通过将kafka consumer消费的offset保存到redis中，并在consumer下次重启后从redis中恢复offset来继续消费，从而避免重复消费。（sarama实现的kafka consumer是有一个专门的goroutine定时flush commmited offset,发生重启后sarama从zookeeper获取offset可能有较大偏差。）  
+proxy在将请求发送到kafka之前，会在redis订阅以请求ID为名的channel,server对于处理完的请求，将相应的处理结果publish到redis对应的channel。  
+相关code如下:  
+```
+//proxy
+//producer
+func (s *CalculateServiceServer) Calculate(ctx context.Context, in *cpb.CalculateRequest) (*cpb.CalculateResponse, error) {
+	...
+	//在redis中订阅以reqId为名的channel
+	pubsub := s.rdb.Subscribe(fmt.Sprintf("%d", reqId))
+	// 等待redis订阅成功
+	_, err = pubsub.Receive()
+	if err != nil {
+	...
+	}
+	defer pubsub.Close()
+	defer pubsub.Unsubscribe(fmt.Sprintf("%d", reqId))
+	//Go channel which receives messages
+	//When pubsub is closed channel is closed too
+	pubsubCh := pubsub.Channel()
+	//将client请求编码为消息后发送到kafka
+	if err := s.ksProducer.ProduceKafkaMessage(topics, fmt.Sprintf("%d", reqId), buf); err != nil {
+	...
+	}
+	t := time.NewTimer(3 * time.Second)
+	for {
+		select {
+		case <-t.C:
+			...
+		case msg := <-pubsubCh:
+			result, err := strconv.ParseFloat(msg.Payload, 32)
+			if err != nil {
+			...
+			}
+			val := fmt.Sprintf("%f", result)
+			//将server处理结果缓存到redis中
+			if err = s.rdb.Set(request, val, 120*time.Second).Err(); err != nil {
+			...
+			}
+			return &cpb.CalculateResponse{Message: "Hello! " + in.Name + "!" + fmt.Sprintf("This is Server: %s:%d", s.info.Addr, s.info.Port), SuccessFlag: true, Result: result}, nil
+		}
+	}
+}
+//server
+//consumer
+func (consumer *Consumer) Setup(sess sarama.ConsumerGroupSession) error {
+	//获取session消费的topic有哪些分区
+	m_partitions := sess.Claims()
+	...
+	for _, topic := range consumer.topics {
+		for _, partNo := range partitions {
+			offset, hwOffset, err := consumer.getOffset(fmt.Sprintf("%s-%d", topic, partNo))
+			//No record value in redis for the first time run
+			if err != nil {
+			...
+			}
+			//if the offset record in redis smaller than the record in zookeeper, then need use ResetOffset
+			//if the offset record in redis bigger than the record in zookeeper, then need use MarkOffset
+			sess.ResetOffset(topic, partNo, offset, "")
+			sess.MarkOffset(topic, partNo, offset, "")
+		}
+	}
+	return nil
+}
+//message protocol: [topic type][retry count][reqID][req]
+func (consumer *Consumer) ProcessMessage(topic, msg string) {
+	message := strings.Split(msg, ":")
+	reqId, err := strconv.ParseInt(message[2], 10, 64)
+	if err != nil {
+	...
+	}
+	switch message[0] {
+	case "Normal":
+		consumer.processNormalTopic(topic, message[3], reqId)
+	case "Retry":
+		retryCnt, err := strconv.Atoi(message[1])
+		if err != nil {
+		...
+		}
+		topic := strings.Split(topic, "Retry-")
+		consumer.processRetryTopic(topic[1], message[3], retryCnt, reqId)
+	case "DeadLetter":
+		consumer.processDeadLetterTopic(topic, message[3], reqId)
+	default:
+	}
+}
+func (s *server) ProcessTopic(topic, msg string, reqId int64) (int, error) {
+	switch topic {
+	case "GrassInWind2019":
+		res, err := s.processReq(msg)
+		if err != nil {
+			return 2, err
+		}
+		//Publish result to redis
+		err = rdb.Publish(fmt.Sprintf("%d", reqId), fmt.Sprintf("%f", res)).Err()
+		if err != nil {
+		...
+		}
+		return 0, nil
+	default:
+	}
+	return 0, nil
+}
+```  
 ## RPC接口  
 RPC接口通过protobuf定义，使用的是proto3版本。  
 ```
 //The request message containing the user's name
 message CalculateRequest {
     string name = 1;
-	string method = 2;
+    string method = 2;
     int32  num1 = 3;
     int32  num2 = 4;
 }
 //The response message
 message CalculateResponse {
     string message = 1;
-	bool    successFlag = 2;
+    bool    successFlag = 2;
     double  result = 3;
 }
 //service definition
@@ -239,9 +402,9 @@ windows下在目录下打开git bash，运行./server.exe -brokers localhost:909
 protoc.exe --plugin=protoc-gen-go=$GOPATH/bin/protoc-gen-go.exe --go_out=plugins=grpc:. --proto_path .  CalculateService.proto  
 一定要带上--go_out=plugins=grpc，否则生成的go文件会缺少gRPC相关的code比如编译会报错，找不到CalculateService.RegisterHelloServiceServer。  
 ## 运行结果  
+### client  
+![client.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/tree/master/image/client_pub-sub.png)
 ### proxy  
 ![proxy_pub-sub.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/tree/master/image/proxy_pub-sub.png)
 ### server  
 ![server.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/tree/master/image/server_pub-sub.png)
-### client  
-![client.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/tree/master/image/client_pub-sub.png)
