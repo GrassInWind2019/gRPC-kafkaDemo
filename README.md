@@ -206,6 +206,36 @@ func (s *server) ProcessTopic(topic, msg string, reqId int64) (int, error) {
 	return 0, nil
 }
 ```  
+## 基于pprof的性能分析Demo  
+在proxy和server之间对于处理结果的获取一开始是采用redis的Set/Get来实现的，在proxy的Calculate方法中循环不断调用Get来查询结果直到超时。  
+在多次测试中发现，采用Set/Get的方式，proxy的经常会超时拿不到处理结果。  
+通过pprof性能分析工具发现，proxy的CPU消耗集中在Calculate的redis.cmdable.Get()调用中（消耗CPU比例达到了91.86%）。  
+然后采用redis的PUB/SUB对此作了优化，proxy的Calculate的CPU消耗降低到了42.86%。proxy不会出现超时拿不到结果了。(需要在测试前创建好topic,否则刚开始运行还是会出现超时，一段时间后正常。)  
+pprof分析CPU数据的命令如下  
+pprof -http=:8080 cpu_pub-sub.prof  
+### 使用pprof统计CPU、HEAP数据的code example  
+```
+import "runtime/pprof"
+
+cpuf, err := os.OpenFile("cpu.prof", os.O_RDWR|os.O_CREATE, 0644)
+if err != nil {
+	panic(err)
+}
+pprof.StartCPUProfile(cpuf)
+heapf, err := os.OpenFile("heap.prof", os.O_RDWR|os.O_CREATE, 0644)
+if err != nil {
+	panic(err)
+}
+pprof.StopCPUProfile()
+cpuf.Close()
+pprof.WriteHeapProfile(heapf)
+heapf.Close()
+```
+### 基于redis Set/Get方式的pprof CPU火焰图  
+![proxy-cpu_set-get.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/blob/master/image/proxy-cpu_set-get.png)
+### 基于redis PUB/SUB方式的pprof CPU火焰图  
+![proxy_pub-sub.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/blob/master/image/proxy_pub-sub.png)
+
 ## RPC接口  
 RPC接口通过protobuf定义，使用的是proto3版本。  
 ```
@@ -322,7 +352,7 @@ processUnaryRPC()-->NewContextWithServerTransportStream()创建一个context
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;-->Handler()实际就是调用SayHello  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;-->sendResponse()将执行结果发送给client  
 sendResponse()-->Write()-->put()-->executeAndPut()将数据存入controlBuffer的list中，然后通知consumer即newHTTP2Server创建的那个goroutine调用get来取数据并发送出去。  
-
+  
 7. Calculate服务  
 Calculate首先根据请求内容去redis中查询是否有对应的记录，若没有则先获取一个唯一id作为请求id，然后向redis订阅以这个id为名称的channel。订阅成功后，新产生一条消息，发送到kafka。然后设置3s超时，在订阅的通道等待server的处理结果。  
 
@@ -387,8 +417,8 @@ https://github.com/GrassInWind2019/gRPC-kafkaDemo
 8. 下载kafka go client sarama  
    go get github.com/Shopify/sarama  
    
-具体的安装步骤请自行搜索教程。
-5. 下载本文code  
+具体的安装步骤请自行搜索教程。  
+9. 下载本文code  
    mkdir -p $GOPATH/src/github.com/GrassInWind2019/  
    cd $GOPATH/src/github.com/GrassInWind2019/  
    git clone git@github.com:GrassInWind2019/gRPC-kafkaDemo.git  
