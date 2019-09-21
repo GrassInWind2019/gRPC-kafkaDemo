@@ -8,9 +8,9 @@
   * * [kafka生产消费示意图](#kafka生产消费示意图)
   * * [本文kafka生产消费过程](#本文kafka生产消费过程)
   * [基于pprof的性能分析Demo](#基于pprof的性能分析Demo)
-  * * [使用pprof统计CPU/HEAP数据的code example](#使用pprof统计CPU/HEAP数据的code example)
-  * * [基于redis Set/Get方式的pprof的CPU火焰图](#基于redis Set/Get方式的pprof的CPU火焰图)
-  * * [基于redis PUB/SUB方式的pprof的CPU火焰图](#基于redis PUB/SUB方式的pprof的CPU火焰图)
+  * * [使用pprof统计CPU/HEAP数据的code的example](#使用pprof统计CPU/HEAP数据的code的example)
+  * * [基于redis的Set/Get方式的pprof的CPU火焰图](#基于redis的Set/Get方式的pprof的CPU火焰图)
+  * * [基于redis的PUB/SUB方式的pprof的CPU火焰图](#基于redis的PUB/SUB方式的pprof的CPU火焰图)
   * [RPC接口](#RPC接口)
   * [client](#client)
   * [proxy](#proxy)
@@ -239,9 +239,9 @@ cpuf.Close()
 pprof.WriteHeapProfile(heapf)
 heapf.Close()
 ```
-### 基于redis Set/Get方式的pprof的CPU火焰图  
+### 基于redis的Set/Get方式的pprof的CPU火焰图  
 ![proxy-cpu_set-get.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/blob/master/image/proxy-cpu_set-get.png)
-### 基于redis PUB/SUB方式的pprof的CPU火焰图  
+### 基于redis的PUB/SUB方式的pprof的CPU火焰图  
 ![proxy-cpu_pub-sub.png](https://github.com/GrassInWind2019/gRPC-kafkaDemo/blob/master/image/proxy-cpu_pub-sub.png)
 
 ## RPC接口  
